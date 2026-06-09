@@ -22,16 +22,46 @@
 <body>
   <div id="loading">
     <div class="spin"></div>
-    <p style="color:#7dd3fc;font-size:13px">💼 Memuat Kasbon Karyawan...</p>
+    <p id="load-msg" style="color:#7dd3fc;font-size:13px">💼 Memuat Kasbon Karyawan...</p>
   </div>
   <div id="root"></div>
 
+  <!-- Dependencies -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js" crossorigin="anonymous"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" crossorigin="anonymous"></script>
-  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/firebase@9.23.0/firebase-app-compat.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/firebase@9.23.0/firebase-firestore-compat.min.js"></script>
 
+  <!-- Initialize Firebase FIRST, then mount React -->
+  <script>
+    (function() {
+      try {
+        var app = firebase.apps.length
+          ? firebase.apps[0]
+          : firebase.initializeApp({
+              apiKey:            "AIzaSyAXbFUnfMIZp0v-0cdehk7xi-XZ3o0Z7MQ",
+              authDomain:        "kasbon-karyawan-1a3bb.firebaseapp.com",
+              projectId:         "kasbon-karyawan-1a3bb",
+              storageBucket:     "kasbon-karyawan-1a3bb.firebasestorage.app",
+              messagingSenderId: "669642107541",
+              appId:             "1:669642107541:web:c108014157039cc605899c"
+            });
+
+        var db = firebase.firestore();
+        // Store globally so React app can access
+        window.__firestore_db = db;
+        window.__firestore_fs = db; // alias
+        window.__firebase_ready = true;
+        console.log("Firebase initialized:", db.constructor.name);
+      } catch(e) {
+        console.error("Firebase init failed:", e.message);
+        window.__firebase_ready = false;
+      }
+    })();
+  </script>
+
+  <!-- React App -->
   <script>
     window.onerror=function(msg,src,line,col,err){
       document.getElementById('loading').innerHTML=
@@ -53,33 +83,17 @@ const FIREBASE_CONFIG = {
 };
 let _db = null;
 let _firebase_ready = false;
-const _listeners = [];
+
 async function initFirebase() {
-  if (_firebase_ready) return _db;
-  try {
-    if (typeof firebase === "undefined") throw new Error("Firebase not loaded");
-    const app = firebase.apps.length ? firebase.apps[0] : firebase.initializeApp(FIREBASE_CONFIG);
-    const db = firebase.firestore();
-    _db = db;
+  if (_firebase_ready && _db) return _db;
+  // Firebase already initialized in HTML before React - just grab the instance
+  if (window.__firestore_db) {
+    _db = window.__firestore_db;
     _firebase_ready = true;
-    window.__fs = {
-      db,
-      collection: (d, col) => d.collection(col),
-      getDocs: (q) => q.get().then(s => ({docs: s.docs.map(d => ({...d.data(), _id: d.id}))})),
-      addDoc: (ref, data) => ref.add(data),
-      deleteDoc: (ref) => ref.delete(),
-      doc: (d, col, id) => d.collection(col).doc(String(id)),
-      setDoc: (ref, data, opts) => opts ? ref.set(data, opts) : ref.set(data),
-      onSnapshot: (q, cb, err) => q.onSnapshot(s => cb({docs: s.docs.map(d => ({...d.data(), _id: d.id}))}), err||(() =>{})),
-      query: (ref, ...fns) => fns.reduce((r, fn) => fn ? fn(r) : r, ref),
-      orderBy: (f, d) => (ref) => ref.orderBy(f, d||"asc"),
-    };
-    console.log("Firebase compat ready");
+    window.__fs = window.__firestore_fs;
     return _db;
-  } catch(e) {
-    console.error("Firebase init error:", e.message);
-    return null;
   }
+  return null;
 }
 const USERS = [
   { username: "admin", password: "admin123", role: "admin", nama: "Administrator" },
@@ -110,19 +124,19 @@ function useFirebase() {
     });
   }, []);
   const fsGet = useCallback(async (col) => {
-    if (!window.__fs) return [];
+    const db = window.__firestore_db;
+    if (!db) return [];
     try {
-      const snap = await window.__fs.db.collection(col).get();
+      const snap = await db.collection(col).get();
       return snap.docs.map(d => ({ ...d.data(), _id: d.id }));
-    } catch(e) { console.error("fsGet error:", e); return []; }
+    } catch(e) { console.error("fsGet error:", e.message); return []; }
   }, []);
   const fsSet = useCallback(async (col, id, data) => {
-    if (!window.__fs) return;
+    const db = window.__firestore_db;
+    if (!db) { console.warn("fsSet: no db"); return; }
     try {
-      await window.__fs.db.collection(col).doc(String(id)).set(
-        { ...data, updatedAt: Date.now() }, { merge: true }
-      );
-    } catch(e) { console.error("fsSet error:", col, id, e); }
+      await db.collection(col).doc(String(id)).set({ ...data, updatedAt: Date.now() }, { merge: true });
+    } catch(e) { console.error("fsSet error:", col, id, e.message); }
   }, []);
   const fsAdd = useCallback(async (col, data) => {
     if (!window.__fs) return null;
@@ -131,19 +145,20 @@ function useFirebase() {
     return ref.id;
   }, []);
   const fsDel = useCallback(async (col, id) => {
-    if (!window.__fs) return;
-    try {
-      await window.__fs.db.collection(col).doc(String(id)).delete();
-    } catch(e) { console.error("fsDel error:", col, id, e); }
+    const db = window.__firestore_db;
+    if (!db) return;
+    try { await db.collection(col).doc(String(id)).delete(); }
+    catch(e) { console.error("fsDel error:", col, id, e.message); }
   }, []);
   const fsListen = useCallback((col, cb) => {
-    if (!window.__fs) return () => {};
+    const db = window.__firestore_db;
+    if (!db) { console.warn("fsListen: no db for", col); return () => {}; }
     try {
-      return window.__fs.db.collection(col).onSnapshot(
+      return db.collection(col).onSnapshot(
         (snap) => cb(snap.docs.map((d) => ({ ...d.data(), _id: d.id }))),
-        (err) => console.warn("Listener error:", col, err)
+        (err) => console.warn("Listener error:", col, err.message)
       );
-    } catch(e) { console.warn("fsListen error:", e); return () => {}; }
+    } catch(e) { console.warn("fsListen error:", col, e.message); return () => {}; }
   }, []);
   return { fbReady, fbError, fsGet, fsSet, fsAdd, fsDel, fsListen };
 }
