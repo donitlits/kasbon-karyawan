@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
   <meta name="theme-color" content="#1e40af"/>
   <meta name="apple-mobile-web-app-capable" content="yes"/>
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
   <title>Kasbon Karyawan</title>
   <style>
     *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -36,7 +35,7 @@
   <script>
     window.onerror=function(msg,src,line,col,err){
       document.getElementById('loading').innerHTML=
-        '<div style="color:#fca5a5;max-width:90vw"><b>⚠️ '+msg+'</b><br><small style="color:#64748b">Line:'+line+'</small>'+
+        '<div style="color:#fca5a5;max-width:90vw"><b>⚠️ '+msg+'</b><br><small>Line:'+line+'</small>'+
         '<br><button onclick="location.reload()" style="margin-top:14px;padding:10px 20px;background:#3b82f6;color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:700">🔄 Coba Lagi</button></div>';
       return true;
     };
@@ -58,15 +57,27 @@ const _listeners = [];
 async function initFirebase() {
   if (_firebase_ready) return _db;
   try {
-    const { initializeApp, getApps } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
-    const { getFirestore, collection, getDocs, addDoc, updateDoc, deleteDoc, doc, onSnapshot, setDoc, query, orderBy } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
-    const app = getApps().length ? getApps()[0] : initializeApp(FIREBASE_CONFIG);
-    _db = getFirestore(app);
+    if (typeof firebase === "undefined") throw new Error("Firebase not loaded");
+    const app = firebase.apps.length ? firebase.apps[0] : firebase.initializeApp(FIREBASE_CONFIG);
+    const db = firebase.firestore();
+    _db = db;
     _firebase_ready = true;
-    window.__fs = { getFirestore, collection, getDocs, addDoc, updateDoc, deleteDoc, doc, onSnapshot, setDoc, query, orderBy, db: _db };
+    window.__fs = {
+      db,
+      collection: (d, col) => d.collection(col),
+      getDocs: (q) => q.get().then(s => ({docs: s.docs.map(d => ({...d.data(), _id: d.id}))})),
+      addDoc: (ref, data) => ref.add(data),
+      deleteDoc: (ref) => ref.delete(),
+      doc: (d, col, id) => d.collection(col).doc(String(id)),
+      setDoc: (ref, data, opts) => opts ? ref.set(data, opts) : ref.set(data),
+      onSnapshot: (q, cb, err) => q.onSnapshot(s => cb({docs: s.docs.map(d => ({...d.data(), _id: d.id}))}), err||(() =>{})),
+      query: (ref, ...fns) => fns.reduce((r, fn) => fn ? fn(r) : r, ref),
+      orderBy: (f, d) => (ref) => ref.orderBy(f, d||"asc"),
+    };
+    console.log("Firebase compat ready");
     return _db;
-  } catch (e) {
-    console.error("Firebase init error:", e);
+  } catch(e) {
+    console.error("Firebase init error:", e.message);
     return null;
   }
 }
@@ -100,18 +111,18 @@ function useFirebase() {
   }, []);
   const fsGet = useCallback(async (col) => {
     if (!window.__fs) return [];
-    const { collection, getDocs, query, orderBy, db } = window.__fs;
     try {
-      const snap = await getDocs(query(collection(db, col), orderBy("createdAt", "asc")));
-      return snap.docs.map((d) => ({ ...d.data(), _id: d.id }));
-    } catch {
-      return [];
-    }
+      const snap = await window.__fs.db.collection(col).get();
+      return snap.docs.map(d => ({ ...d.data(), _id: d.id }));
+    } catch(e) { console.error("fsGet error:", e); return []; }
   }, []);
   const fsSet = useCallback(async (col, id, data) => {
     if (!window.__fs) return;
-    try { await window.__fs.db.collection(col).doc(String(id)).set({ ...data, updatedAt: Date.now() }, { merge: true }); }
-    catch(e) { console.error("fsSet error:", e); }
+    try {
+      await window.__fs.db.collection(col).doc(String(id)).set(
+        { ...data, updatedAt: Date.now() }, { merge: true }
+      );
+    } catch(e) { console.error("fsSet error:", col, id, e); }
   }, []);
   const fsAdd = useCallback(async (col, data) => {
     if (!window.__fs) return null;
@@ -121,15 +132,17 @@ function useFirebase() {
   }, []);
   const fsDel = useCallback(async (col, id) => {
     if (!window.__fs) return;
-    try { await window.__fs.db.collection(col).doc(String(id)).delete(); }
-    catch(e) { console.error("fsDel error:", e); }
+    try {
+      await window.__fs.db.collection(col).doc(String(id)).delete();
+    } catch(e) { console.error("fsDel error:", col, id, e); }
   }, []);
   const fsListen = useCallback((col, cb) => {
     if (!window.__fs) return () => {};
     try {
-      return window.__fs.db.collection(col).onSnapshot((snap) => {
-        cb(snap.docs.map((d) => ({ ...d.data(), _id: d.id })));
-      }, (err) => console.warn("Listener error:", err));
+      return window.__fs.db.collection(col).onSnapshot(
+        (snap) => cb(snap.docs.map((d) => ({ ...d.data(), _id: d.id }))),
+        (err) => console.warn("Listener error:", col, err)
+      );
     } catch(e) { console.warn("fsListen error:", e); return () => {}; }
   }, []);
   return { fbReady, fbError, fsGet, fsSet, fsAdd, fsDel, fsListen };
