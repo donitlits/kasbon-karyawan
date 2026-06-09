@@ -1,0 +1,996 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
+  <meta name="theme-color" content="#1e40af"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <title>Kasbon Karyawan</title>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+    body{background:#0f172a;font-family:'Segoe UI',Tahoma,sans-serif}
+    #loading{position:fixed;inset:0;background:#0f172a;display:flex;flex-direction:column;
+      align-items:center;justify-content:center;z-index:9999;padding:20px;text-align:center}
+    .spin{width:44px;height:44px;border:4px solid #1e3a5f;border-top-color:#0ea5e9;
+      border-radius:50%;animation:spin .8s linear infinite;margin-bottom:16px}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    #root{min-height:100vh}
+    input[type="date"]{color-scheme:dark}
+    input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(1);opacity:0.7}
+  </style>
+</head>
+<body>
+  <div id="loading">
+    <div class="spin"></div>
+    <p style="color:#7dd3fc;font-size:13px">💼 Memuat Kasbon Karyawan...</p>
+  </div>
+  <div id="root"></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js" crossorigin="anonymous"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" crossorigin="anonymous"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+
+  <script>
+    window.onerror=function(msg,src,line,col,err){
+      document.getElementById('loading').innerHTML=
+        '<div style="color:#fca5a5;max-width:90vw"><b>⚠️ '+msg+'</b><br><small style="color:#64748b">Line:'+line+'</small>'+
+        '<br><button onclick="location.reload()" style="margin-top:14px;padding:10px 20px;background:#3b82f6;color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:700">🔄 Coba Lagi</button></div>';
+      return true;
+    };
+    try{
+      var useState=React.useState,useMemo=React.useMemo,useRef=React.useRef,
+          useEffect=React.useEffect,useCallback=React.useCallback;
+      var XLSX=window.XLSX;
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyAXbFUnfMIZp0v-0cdehk7xi-XZ3o0Z7MQ",
+  authDomain: "kasbon-karyawan-1a3bb.firebaseapp.com",
+  projectId: "kasbon-karyawan-1a3bb",
+  storageBucket: "kasbon-karyawan-1a3bb.firebasestorage.app",
+  messagingSenderId: "669642107541",
+  appId: "1:669642107541:web:c108014157039cc605899c"
+};
+let _db = null;
+let _firebase_ready = false;
+const _listeners = [];
+async function initFirebase() {
+  if (_firebase_ready) return _db;
+  try {
+    const { initializeApp, getApps } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
+    const { getFirestore, collection, getDocs, addDoc, updateDoc, deleteDoc, doc, onSnapshot, setDoc, query, orderBy } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
+    const app = getApps().length ? getApps()[0] : initializeApp(FIREBASE_CONFIG);
+    _db = getFirestore(app);
+    _firebase_ready = true;
+    window.__fs = { getFirestore, collection, getDocs, addDoc, updateDoc, deleteDoc, doc, onSnapshot, setDoc, query, orderBy, db: _db };
+    return _db;
+  } catch (e) {
+    console.error("Firebase init error:", e);
+    return null;
+  }
+}
+const USERS = [
+  { username: "admin", password: "admin123", role: "admin", nama: "Administrator" },
+  { username: "admin2", password: "admin234", role: "admin", nama: "Administrator 2" },
+  { username: "owner", password: "owner123", role: "owner", nama: "Owner" }
+];
+const INIT_EMPLOYEES = [];
+const INIT_LIMITS = {};
+const DEFAULT_QUICK = [15e3, 25e3, 5e4, 1e5, 15e4, 2e5, 25e4, 5e5, 1e6];
+const DEFAULT_TPLS = ["Kasbon harian", "Pulang kampung", "Keperluan keluarga", "Biaya pengobatan", "Biaya sekolah anak", "Kebutuhan darurat", "Transportasi", "Makan siang", "Keperluan pribadi", "Renovasi rumah"];
+const initialData = [];
+const MONTHS = ["", "Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+const fmt = (n) => "Rp " + Number(n).toLocaleString("id-ID");
+const fmtTgl = (s) => {
+  if (!s) return "-";
+  const [y, m, d] = s.split("-");
+  return `${d} ${MONTHS[+m]} ${y}`;
+};
+const IS = { width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px solid #334155", background: "#0f172a", color: "#e2e8f0", fontSize: 14, outline: "none", boxSizing: "border-box" };
+const LS = { display: "block", color: "#94a3b8", fontSize: 12, fontWeight: 600, marginBottom: 6 };
+function useFirebase() {
+  const [fbReady, setFbReady] = useState(false);
+  const [fbError, setFbError] = useState(false);
+  useEffect(() => {
+    initFirebase().then((db) => {
+      if (db) setFbReady(true);
+      else setFbError(true);
+    });
+  }, []);
+  const fsGet = useCallback(async (col) => {
+    if (!window.__fs) return [];
+    const { collection, getDocs, query, orderBy, db } = window.__fs;
+    try {
+      const snap = await getDocs(query(collection(db, col), orderBy("createdAt", "asc")));
+      return snap.docs.map((d) => ({ ...d.data(), _id: d.id }));
+    } catch {
+      return [];
+    }
+  }, []);
+  const fsSet = useCallback(async (col, id, data) => {
+    if (!window.__fs) return;
+    try { await window.__fs.db.collection(col).doc(String(id)).set({ ...data, updatedAt: Date.now() }, { merge: true }); }
+    catch(e) { console.error("fsSet error:", e); }
+  }, []);
+  const fsAdd = useCallback(async (col, data) => {
+    if (!window.__fs) return null;
+    const { collection, addDoc, db } = window.__fs;
+    const ref = await addDoc(collection(db, col), { ...data, createdAt: Date.now() });
+    return ref.id;
+  }, []);
+  const fsDel = useCallback(async (col, id) => {
+    if (!window.__fs) return;
+    try { await window.__fs.db.collection(col).doc(String(id)).delete(); }
+    catch(e) { console.error("fsDel error:", e); }
+  }, []);
+  const fsListen = useCallback((col, cb) => {
+    if (!window.__fs) return () => {};
+    try {
+      return window.__fs.db.collection(col).onSnapshot((snap) => {
+        cb(snap.docs.map((d) => ({ ...d.data(), _id: d.id })));
+      }, (err) => console.warn("Listener error:", err));
+    } catch(e) { console.warn("fsListen error:", e); return () => {}; }
+  }, []);
+  return { fbReady, fbError, fsGet, fsSet, fsAdd, fsDel, fsListen };
+}
+function LoginScreen({ onLogin, users: userList }) {
+  const ULIST = userList || USERS;
+  const [user, setUser] = useState("");
+  const [pass, setPass] = useState("");
+  const [show, setShow] = useState(false);
+  const [err, setErr] = useState("");
+  const [shake, setShake] = useState(false);
+  const handleLogin = () => {
+    const found = ULIST.find((u) => u.username === user.trim().toLowerCase() && u.password === pass);
+    if (found) {
+      onLogin(found);
+    } else {
+      setErr("Username atau password salah!");
+      setShake(true);
+      setTimeout(() => setShake(false), 500);
+    }
+  };
+  return /* @__PURE__ */ React.createElement("div", { style: { minHeight: "100vh", background: "linear-gradient(135deg,#0f172a 0%,#1e3a5f 60%,#0f172a 100%)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "24px" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 52, marginBottom: 12 } }, "\u{1F4BC}"), /* @__PURE__ */ React.createElement("h1", { style: { color: "#fff", fontSize: 24, fontWeight: 900, margin: "0 0 4px", letterSpacing: 1 } }, "KASBON KARYAWAN"), /* @__PURE__ */ React.createElement("p", { style: { color: "#7dd3fc", fontSize: 13, margin: "0 0 32px" } }, "Silakan login untuk melanjutkan"), /* @__PURE__ */ React.createElement("div", { style: {
+    width: "100%",
+    maxWidth: 340,
+    background: "#1e293b",
+    borderRadius: 20,
+    padding: 28,
+    border: "1px solid #334155",
+    boxShadow: "0 20px 60px rgba(0,0,0,0.5)",
+    animation: shake ? "shake .4s ease" : "fadeUp .4s ease"
+  } }, err && /* @__PURE__ */ React.createElement("div", { style: { background: "#7f1d1d", border: "1px solid #ef4444", borderRadius: 10, padding: "10px 14px", marginBottom: 16, color: "#fca5a5", fontSize: 13, fontWeight: 600, textAlign: "center" } }, "\u26A0\uFE0F ", err), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", color: "#94a3b8", fontSize: 12, fontWeight: 600, marginBottom: 6 } }, "Username"), /* @__PURE__ */ React.createElement(
+    "input",
+    {
+      value: user,
+      onChange: (e) => {
+        setUser(e.target.value);
+        setErr("");
+      },
+      onKeyDown: (e) => e.key === "Enter" && handleLogin(),
+      placeholder: "Masukkan username...",
+      autoCapitalize: "none",
+      style: { width: "100%", padding: "11px 14px", borderRadius: 10, border: "1px solid #334155", background: "#0f172a", color: "#e2e8f0", fontSize: 14, outline: "none", boxSizing: "border-box" }
+    }
+  )), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 20 } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", color: "#94a3b8", fontSize: 12, fontWeight: 600, marginBottom: 6 } }, "Password"), /* @__PURE__ */ React.createElement("div", { style: { position: "relative" } }, /* @__PURE__ */ React.createElement(
+    "input",
+    {
+      type: show ? "text" : "password",
+      value: pass,
+      onChange: (e) => {
+        setPass(e.target.value);
+        setErr("");
+      },
+      onKeyDown: (e) => e.key === "Enter" && handleLogin(),
+      placeholder: "Masukkan password...",
+      style: { width: "100%", padding: "11px 44px 11px 14px", borderRadius: 10, border: "1px solid #334155", background: "#0f172a", color: "#e2e8f0", fontSize: 14, outline: "none", boxSizing: "border-box" }
+    }
+  ), /* @__PURE__ */ React.createElement("button", { onClick: () => setShow((s) => !s), style: { position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: "#64748b", cursor: "pointer", fontSize: 16, padding: 0 } }, show ? "\u{1F648}" : "\u{1F441}\uFE0F"))), /* @__PURE__ */ React.createElement("button", { onClick: handleLogin, style: { width: "100%", padding: "13px", borderRadius: 12, border: "none", cursor: "pointer", background: "linear-gradient(90deg,#1d4ed8,#0ea5e9)", color: "#fff", fontWeight: 900, fontSize: 15 } }, "\u{1F510} Masuk")), /* @__PURE__ */ React.createElement("style", null, `
+        @keyframes fadeUp{from{transform:translateY(30px);opacity:0}to{transform:translateY(0);opacity:1}}
+        @keyframes shake{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-8px)}40%,80%{transform:translateX(8px)}}
+      `));
+}
+function QuickBtn({ label, onTap }) {
+  const [active, setActive] = useState(false);
+  const timerRef = useRef(null);
+  const trigger = () => {
+    onTap();
+    setActive(true);
+    clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => setActive(false), 180);
+  };
+  return /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      onClick: trigger,
+      style: {
+        padding: "6px 11px",
+        borderRadius: 20,
+        border: `1px solid ${active ? "#3b82f6" : "#334155"}`,
+        background: active ? "#1d4ed8" : "#0f172a",
+        color: active ? "#fff" : "#94a3b8",
+        cursor: "pointer",
+        fontSize: 12,
+        fontWeight: 600,
+        transition: "background .12s, color .12s, border-color .12s",
+        userSelect: "none",
+        WebkitUserSelect: "none"
+      }
+    },
+    label
+  );
+}
+function JumlahInput({ value, onChange, quickAmounts }) {
+  const [disp, setDisp] = useState(value ? Number(value).toLocaleString("id-ID") : "");
+  const prev = useRef(value);
+  useEffect(() => {
+    if (prev.current !== value) {
+      prev.current = value;
+      setDisp(value ? Number(value).toLocaleString("id-ID") : "");
+    }
+  }, [value]);
+  const hc = (e) => {
+    const r = e.target.value.replace(/\./g, "").replace(/[^0-9]/g, "");
+    const n = parseInt(r, 10) || 0;
+    setDisp(r === "" ? "" : Number(n).toLocaleString("id-ID"));
+    onChange(n);
+  };
+  const hq = (a) => {
+    const nv = (value || 0) + a;
+    setDisp(Number(nv).toLocaleString("id-ID"));
+    onChange(nv);
+  };
+  const hclr = () => {
+    setDisp("");
+    onChange(0);
+  };
+  return /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { position: "relative" } }, /* @__PURE__ */ React.createElement("input", { type: "text", inputMode: "numeric", value: disp, onChange: hc, placeholder: "Contoh: 500.000", style: { ...IS, paddingRight: disp ? "40px" : "12px" } }), disp && /* @__PURE__ */ React.createElement("button", { onClick: hclr, style: { position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: "#64748b", cursor: "pointer", fontSize: 18, lineHeight: 1, padding: 0 } }, "\u2715")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 } }, quickAmounts.map((a) => /* @__PURE__ */ React.createElement(QuickBtn, { key: a, label: `+${fmt(a)}`, onTap: () => hq(a) }))), value > 0 && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 6, color: "#f59e0b", fontSize: 12, fontWeight: 700 } }, "Total: ", fmt(value)));
+}
+function KetInput({ value, onChange, templates }) {
+  const [open, setOpen] = useState(false);
+  return /* @__PURE__ */ React.createElement("div", { style: { position: "relative" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement("textarea", { value, onChange: (e) => onChange(e.target.value), placeholder: "Ketik atau pilih template...", rows: 2, style: { ...IS, resize: "none", flex: 1 } }), /* @__PURE__ */ React.createElement("button", { onClick: () => setOpen((o) => !o), style: { padding: "0 12px", borderRadius: 10, border: "1px solid #334155", background: open ? "#1d4ed8" : "#0f172a", color: open ? "#fff" : "#64748b", cursor: "pointer", fontSize: 18, flexShrink: 0 } }, "\u{1F4CB}")), open && /* @__PURE__ */ React.createElement("div", { style: { position: "absolute", top: "100%", left: 0, right: 0, zIndex: 300, background: "#1e293b", border: "1px solid #334155", borderRadius: 12, boxShadow: "0 8px 32px rgba(0,0,0,0.5)", marginTop: 4, maxHeight: 200, overflowY: "auto" } }, templates.length === 0 ? /* @__PURE__ */ React.createElement("div", { style: { padding: "16px", color: "#64748b", fontSize: 13, textAlign: "center" } }, "Belum ada template.", /* @__PURE__ */ React.createElement("br", null), "Tambah di tab \u2699\uFE0F Setting.") : templates.map((t, i) => /* @__PURE__ */ React.createElement(
+    "div",
+    {
+      key: i,
+      onClick: () => {
+        onChange(t);
+        setOpen(false);
+      },
+      style: { padding: "10px 14px", cursor: "pointer", color: "#e2e8f0", fontSize: 14, borderBottom: i < templates.length - 1 ? "1px solid #0f172a" : "none" },
+      onMouseEnter: (e) => e.currentTarget.style.background = "#0f172a",
+      onMouseLeave: (e) => e.currentTarget.style.background = "transparent"
+    },
+    t
+  ))));
+}
+function LimitInput({ value, onChange }) {
+  const [disp, setDisp] = useState(value ? Number(value).toLocaleString("id-ID") : "");
+  const prev = useRef(value);
+  useEffect(() => {
+    if (prev.current !== value) {
+      prev.current = value;
+      setDisp(value ? Number(value).toLocaleString("id-ID") : "");
+    }
+  }, [value]);
+  const hc = (e) => {
+    const r = e.target.value.replace(/\./g, "").replace(/[^0-9]/g, "");
+    const n = parseInt(r, 10) || 0;
+    setDisp(r === "" ? "" : Number(n).toLocaleString("id-ID"));
+    onChange(n);
+  };
+  return /* @__PURE__ */ React.createElement("input", { type: "text", inputMode: "numeric", value: disp, onChange: hc, placeholder: "Tanpa batas (kosongkan)", style: IS });
+}
+function KasbonMain({ currentUser, onLogout }) {
+  const { fbReady, fbError, fsGet, fsSet, fsAdd, fsDel, fsListen } = useFirebase();
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState("");
+  const [auditLog, setAuditLog] = useState([]);
+  const [showAudit, setShowAudit] = useState(false);
+  const [users, setUsers] = useState(USERS.map((u) => ({ ...u })));
+  const [editUser, setEditUser] = useState(null);
+  const [showPassIdx, setShowPassIdx] = useState(null);
+  const [confirmLogout, setConfirmLogout] = useState(false);
+  const isAdmin = currentUser.role === "admin";
+  const isOwner = currentUser.role === "owner";
+  const addAudit = (aksi, detail) => {
+    const entry = {
+      id: Date.now(),
+      waktu: (/* @__PURE__ */ new Date()).toLocaleString("id-ID", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }),
+      aksi,
+      oleh: currentUser.nama + " (" + currentUser.role + ")",
+      detail
+    };
+    setAuditLog((prev) => {
+      const newLog = [entry, ...prev];
+      fbSaveSetting("auditlog", { list: newLog });
+      return newLog;
+    });
+  };
+  const unreadAudit = isOwner ? auditLog.filter((l) => !l.read).length : 0;
+  const [employees, setEmployees] = useState(INIT_EMPLOYEES);
+  const [empLimits, setEmpLimits] = useState(INIT_LIMITS);
+  const [editLimitEmp, setEditLimitEmp] = useState(null);
+  const [tempLimit, setTempLimit] = useState(0);
+  const [records, setRecords] = useState(initialData);
+  const [quickAmts, setQuickAmts] = useState(DEFAULT_QUICK);
+  const [ketTpls, setKetTpls] = useState(DEFAULT_TPLS);
+  const [tab, setTab] = useState("input");
+  const [form, setForm] = useState({ karyawan: "", tanggal: "", jumlah: 0, keterangan: "" });
+  const [editId, setEditId] = useState(null);
+  const [fKary, setFKary] = useState("");
+  const [fBulan, setFBulan] = useState("");
+  const [fTahun, setFTahun] = useState("");
+  const [search, setSearch] = useState("");
+  const [toast, setToast] = useState(null);
+  const [confirmDel, setConfirmDel] = useState(null);
+  const [confirmDelEmp, setConfirmDelEmp] = useState(null);
+  const [newEmp, setNewEmp] = useState("");
+  const [empSearch, setEmpSearch] = useState("");
+  const [detailKary, setDetailKary] = useState(null);
+  const [newAmt, setNewAmt] = useState("");
+  const [newKet, setNewKet] = useState("");
+  const [savedPopup, setSavedPopup] = useState(null);
+  const [limitPopup, setLimitPopup] = useState(null);
+  const showToast = (msg, type = "ok") => {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 2500);
+  };
+  const isFirebaseMode = FIREBASE_CONFIG.apiKey !== "GANTI_API_KEY";
+  useEffect(() => {
+    if (!fbReady || !isFirebaseMode) return;
+    const unsubRec = fsListen("records", (docs) => {
+      setRecords(docs.map((d) => ({
+        id: d._id,
+        karyawan: d.karyawan,
+        tanggal: d.tanggal,
+        jumlah: d.jumlah,
+        keterangan: d.keterangan || ""
+      })));
+    });
+    const unsubEmp = fsListen("settings", (docs) => {
+      const empDoc = docs.find((d) => d._id === "employees");
+      const limitDoc = docs.find((d) => d._id === "limits");
+      const quickDoc = docs.find((d) => d._id === "quick");
+      const tplDoc = docs.find((d) => d._id === "templates");
+      const auditDoc = docs.find((d) => d._id === "auditlog");
+      const usersDoc = docs.find((d) => d._id === "users");
+      if (empDoc && empDoc.list) setEmployees(empDoc.list);
+      if (limitDoc && limitDoc.data) setEmpLimits(limitDoc.data);
+      if (quickDoc && quickDoc.list) setQuickAmts(quickDoc.list);
+      if (tplDoc && tplDoc.list) setKetTpls(tplDoc.list);
+      if (auditDoc && auditDoc.list) setAuditLog(auditDoc.list);
+      if (usersDoc && usersDoc.list) setUsers(usersDoc.list);
+    });
+    return () => {
+      unsubRec();
+      unsubEmp();
+    };
+  }, [fbReady, isFirebaseMode]);
+  const fbSaveRecord = async (rec) => {
+    if (!isFirebaseMode) return;
+    await fsSet("records", String(rec.id), {
+      karyawan: rec.karyawan,
+      tanggal: rec.tanggal,
+      jumlah: rec.jumlah,
+      keterangan: rec.keterangan || "",
+      createdAt: rec.id
+    });
+  };
+  const fbDelRecord = async (id) => {
+    if (!isFirebaseMode) return;
+    await fsDel("records", String(id));
+  };
+  const fbSaveSetting = async (id, data) => {
+    if (!isFirebaseMode) return;
+    await fsSet("settings", id, { ...data, createdAt: data.createdAt || Date.now() });
+  };
+  const hChange = (e) => setForm((f) => ({ ...f, [e.target.name]: e.target.value }));
+  const resetForm = () => {
+    setForm({ karyawan: "", tanggal: "", jumlah: 0, keterangan: "" });
+    setEditId(null);
+  };
+  const getMonthTotal = (nama, tgl) => {
+    if (!tgl) return 0;
+    const [y, m] = tgl.split("-");
+    return records.filter((r) => r.karyawan === nama && (editId ? r.id !== editId : true)).filter((r) => {
+      const [ry, rm] = r.tanggal.split("-");
+      return ry === y && rm === m;
+    }).reduce((s, r) => s + r.jumlah, 0);
+  };
+  const handleSubmit = () => {
+    if (!form.karyawan || !form.tanggal || !form.jumlah) {
+      showToast("Lengkapi field wajib!", "err");
+      return;
+    }
+    const limit = empLimits[form.karyawan] || 0;
+    if (limit > 0) {
+      const sudah = getMonthTotal(form.karyawan, form.tanggal);
+      const sisa = limit - sudah;
+      if (form.jumlah > sisa) {
+        setLimitPopup({ nama: form.karyawan, limit, sudah, akan: form.jumlah, sisa: Math.max(sisa, 0) });
+        return;
+      }
+    }
+    if (editId) {
+      const prev = records.find((x) => x.id === editId);
+      const updRec = { ...prev, ...form };
+      setRecords((r) => r.map((x) => x.id === editId ? updRec : x));
+      fbSaveRecord(updRec);
+      addAudit("EDIT", `Kasbon ${form.karyawan}: ${fmtTgl(prev?.tanggal)} ${fmt(prev?.jumlah || 0)} \u2192 ${fmtTgl(form.tanggal)} ${fmt(form.jumlah)}${form.keterangan ? " | " + form.keterangan : ""}`);
+      resetForm();
+      showToast("Kasbon diperbarui!");
+    } else {
+      const newRec = { id: Date.now(), ...form };
+      setRecords((r) => [...r, newRec]);
+      fbSaveRecord(newRec);
+      setSavedPopup({ nama: form.karyawan, jumlah: form.jumlah, tgl: form.tanggal, keterangan: form.keterangan });
+      resetForm();
+    }
+  };
+  const handleEdit = (rec) => {
+    setForm({ karyawan: rec.karyawan, tanggal: rec.tanggal, jumlah: rec.jumlah, keterangan: rec.keterangan });
+    setEditId(rec.id);
+    setTab("input");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+  const handleDel = (id) => {
+    const rec = records.find((x) => x.id === id);
+    setRecords((r) => r.filter((x) => x.id !== id));
+    fbDelRecord(id);
+    setConfirmDel(null);
+    addAudit("HAPUS", `Kasbon ${rec?.karyawan} tgl ${fmtTgl(rec?.tanggal)} sejumlah ${fmt(rec?.jumlah || 0)}${rec?.keterangan ? " (" + rec.keterangan + ")" : ""}  dihapus`);
+    showToast("Data dihapus", "err");
+  };
+  const handleAddEmp = () => {
+    const name = newEmp.trim();
+    if (!name) {
+      showToast("Nama tidak boleh kosong", "err");
+      return;
+    }
+    if (employees.find((e) => e.toLowerCase() === name.toLowerCase())) {
+      showToast("Karyawan sudah ada", "err");
+      return;
+    }
+    const newList = [...employees, name].sort();
+    setEmployees(newList);
+    setNewEmp("");
+    showToast(`${name} ditambahkan!`);
+    fbSaveSetting("employees", { list: newList });
+  };
+  const handleDelEmp = (name) => {
+    const newList = employees.filter((x) => x !== name);
+    setEmployees(newList);
+    setConfirmDelEmp(null);
+    showToast(`${name} dihapus`, "err");
+    fbSaveSetting("employees", { list: newList });
+  };
+  const years = useMemo(() => [...new Set(records.map((r) => r.tanggal.split("-")[0]))].sort().reverse(), [records]);
+  const filtered = useMemo(() => records.filter((r) => {
+    const [y, m] = r.tanggal.split("-");
+    if (fKary && r.karyawan !== fKary) return false;
+    if (fBulan && m !== fBulan.padStart(2, "0")) return false;
+    if (fTahun && y !== fTahun) return false;
+    if (search && !r.karyawan.toLowerCase().includes(search.toLowerCase()) && !r.keterangan.toLowerCase().includes(search.toLowerCase())) return false;
+    return true;
+  }), [records, fKary, fBulan, fTahun, search]);
+  const totalAll = records.reduce((s, r) => s + r.jumlah, 0);
+  const totalFiltered = filtered.reduce((s, r) => s + r.jumlah, 0);
+  const rekapByKary = useMemo(() => {
+    const g = {};
+    filtered.forEach((r) => {
+      if (!g[r.karyawan]) g[r.karyawan] = { total: 0, count: 0, items: [] };
+      g[r.karyawan].total += r.jumlah;
+      g[r.karyawan].count += 1;
+      g[r.karyawan].items.push(r);
+    });
+    return g;
+  }, [filtered]);
+  const filteredEmps = employees.filter((e) => e.toLowerCase().includes(empSearch.toLowerCase()));
+  const detailItems = detailKary && rekapByKary[detailKary] ? [...rekapByKary[detailKary].items].sort((a, b) => b.tanggal.localeCompare(a.tanggal)) : [];
+  const formLimit = empLimits[form.karyawan] || 0;
+  const hasTanggal = !!(form.karyawan && form.tanggal);
+  const formSudah = hasTanggal ? getMonthTotal(form.karyawan, form.tanggal) : 0;
+  const formSisa = formLimit > 0 ? Math.max(formLimit - formSudah, 0) : null;
+  const formOverLimit = formLimit > 0 && form.jumlah > 0 && formSudah + form.jumlah > formLimit;
+  const formBulan = form.tanggal ? MONTHS[+form.tanggal.split("-")[1]] : "";
+  const exportExcel = (mode) => {
+    const data = [...filtered].sort((a, b) => a.karyawan.localeCompare(b.karyawan) || a.tanggal.localeCompare(b.tanggal));
+    const wb = XLSX.utils.book_new();
+    const tgl = (/* @__PURE__ */ new Date()).toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" });
+    const labelKary = fKary || "Semua Karyawan";
+    const labelBulan = fBulan ? MONTHS[+fBulan] : "Semua Bulan";
+    const labelTahun = fTahun || "Semua Tahun";
+    const judulFilter = `Filter: ${labelKary} | ${labelBulan} | ${labelTahun}`;
+    const COLS = [{ wch: 5 }, { wch: 22 }, { wch: 16 }, { wch: 12 }, { wch: 8 }, { wch: 32 }, { wch: 22 }];
+    const writeTitle = (ws, judul) => {
+      XLSX.utils.sheet_add_aoa(ws, [
+        [judul],
+        [judulFilter],
+        [`Dicetak: ${tgl}`],
+        [],
+        ["No", "Karyawan", "Tanggal", "Bulan", "Tahun", "Keterangan", "Jumlah Kasbon (Rp)"]
+      ], { origin: "A1" });
+      return 6;
+    };
+    const makeFlat = (judul, rows_data) => {
+      const ws = XLSX.utils.json_to_sheet([]);
+      let r = writeTitle(ws, judul);
+      let no = 1, grand = 0;
+      rows_data.forEach((rec) => {
+        XLSX.utils.sheet_add_aoa(ws, [[
+          no++,
+          rec.karyawan,
+          fmtTgl(rec.tanggal),
+          MONTHS[+rec.tanggal.split("-")[1]],
+          rec.tanggal.split("-")[0],
+          rec.keterangan || "-",
+          rec.jumlah
+        ]], { origin: { r: r - 1, c: 0 } });
+        grand += rec.jumlah;
+        r++;
+      });
+      r++;
+      XLSX.utils.sheet_add_aoa(
+        ws,
+        [["", "", "", "", "", "TOTAL SEMUA", grand]],
+        { origin: { r: r - 1, c: 0 } }
+      );
+      ws["!cols"] = COLS;
+      return ws;
+    };
+    const makeGroup = (judul, groups) => {
+      const ws = XLSX.utils.json_to_sheet([]);
+      let r = writeTitle(ws, judul);
+      let no = 1, grand = 0;
+      Object.entries(groups).forEach(([key, grp]) => {
+        const items = [...grp.items].sort((a, b) => a.tanggal.localeCompare(b.tanggal));
+        let subTotal = 0;
+        items.forEach((rec) => {
+          XLSX.utils.sheet_add_aoa(ws, [[
+            no++,
+            rec.karyawan,
+            fmtTgl(rec.tanggal),
+            MONTHS[+rec.tanggal.split("-")[1]],
+            rec.tanggal.split("-")[0],
+            rec.keterangan || "-",
+            rec.jumlah
+          ]], { origin: { r: r - 1, c: 0 } });
+          subTotal += rec.jumlah;
+          r++;
+        });
+        grand += subTotal;
+      });
+      XLSX.utils.sheet_add_aoa(
+        ws,
+        [["", "", "", "", "", "TOTAL GLOBAL", grand]],
+        { origin: { r: r - 1, c: 0 } }
+      );
+      ws["!cols"] = COLS;
+      return ws;
+    };
+    const gKary = {}, gBulan = {}, gTahun = {};
+    data.forEach((r) => {
+      const [y, m] = r.tanggal.split("-");
+      const kb = `${MONTHS[+m]} ${y}`;
+      if (!gKary[r.karyawan]) gKary[r.karyawan] = { items: [] };
+      if (!gBulan[kb]) gBulan[kb] = { items: [], sort: `${y}-${m}` };
+      if (!gTahun[y]) gTahun[y] = { items: [] };
+      gKary[r.karyawan].items.push(r);
+      gBulan[kb].items.push(r);
+      gTahun[y].items.push(r);
+    });
+    const sKary = Object.fromEntries(Object.entries(gKary).sort((a, b) => a[0].localeCompare(b[0])));
+    const sBulan = Object.fromEntries(Object.entries(gBulan).sort((a, b) => a[1].sort.localeCompare(b[1].sort)));
+    const sTahun = Object.fromEntries(Object.entries(gTahun).sort((a, b) => a[0].localeCompare(b[0])));
+    if (mode === "detail")
+      XLSX.utils.book_append_sheet(wb, makeFlat("REKAP KASBON KARYAWAN", data), "Detail Transaksi");
+    if (mode === "rekap_karyawan")
+      XLSX.utils.book_append_sheet(wb, makeGroup("REKAP PER KARYAWAN", sKary), "Per Karyawan");
+    if (mode === "rekap_bulan")
+      XLSX.utils.book_append_sheet(wb, makeGroup("REKAP PER BULAN", sBulan), "Per Bulan");
+    if (mode === "rekap_tahun")
+      XLSX.utils.book_append_sheet(wb, makeGroup("REKAP PER TAHUN", sTahun), "Per Tahun");
+    if (mode === "semua") {
+      XLSX.utils.book_append_sheet(wb, makeFlat("DETAIL SEMUA TRANSAKSI", data), "Detail");
+      XLSX.utils.book_append_sheet(wb, makeGroup("REKAP PER KARYAWAN", sKary), "Per Karyawan");
+      XLSX.utils.book_append_sheet(wb, makeGroup("REKAP PER BULAN", sBulan), "Per Bulan");
+      XLSX.utils.book_append_sheet(wb, makeGroup("REKAP PER TAHUN", sTahun), "Per Tahun");
+    }
+    const lk = fKary ? fKary.replace(/\s+/g, "_") : "Semua";
+    const lb = fBulan ? MONTHS[+fBulan] : "SemuaBulan";
+    const lt = fTahun || "SemuaTahun";
+    XLSX.writeFile(wb, `Kasbon_${lk}_${lb}_${lt}.xlsx`);
+    showToast("File Excel berhasil diunduh! \u{1F4CA}");
+  };
+  return /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "'Segoe UI',Tahoma,sans-serif", minHeight: "100vh", background: "linear-gradient(135deg,#0f172a 0%,#1e3a5f 60%,#0f172a 100%)", paddingBottom: 60 } }, confirmLogout && /* @__PURE__ */ React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.8)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 24px" } }, /* @__PURE__ */ React.createElement("div", { style: { background: "#1e293b", border: "1px solid #334155", borderRadius: 20, padding: 28, textAlign: "center", width: "100%", maxWidth: 300, animation: "popIn .25s ease" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 44, marginBottom: 10 } }, "\u{1F6AA}"), /* @__PURE__ */ React.createElement("div", { style: { color: "#f1f5f9", fontWeight: 900, fontSize: 18, marginBottom: 6 } }, "Keluar Aplikasi?"), /* @__PURE__ */ React.createElement("div", { style: { color: "#94a3b8", fontSize: 13, marginBottom: 22 } }, "Anda akan keluar dari akun ", /* @__PURE__ */ React.createElement("span", { style: { color: "#f59e0b", fontWeight: 700 } }, currentUser.nama)), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10 } }, /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      onClick: () => setConfirmLogout(false),
+      style: { flex: 1, padding: "11px", borderRadius: 10, border: "1px solid #475569", background: "transparent", color: "#94a3b8", cursor: "pointer", fontWeight: 700, fontSize: 14 }
+    },
+    "Batal"
+  ), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      onClick: () => {
+        setConfirmLogout(false);
+        onLogout();
+      },
+      style: { flex: 1, padding: "11px", borderRadius: 10, border: "none", background: "linear-gradient(90deg,#dc2626,#ef4444)", color: "#fff", cursor: "pointer", fontWeight: 800, fontSize: 14 }
+    },
+    "\u{1F6AA} Logout"
+  )))), editUser && /* @__PURE__ */ React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.82)", zIndex: 9998, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 20px" } }, /* @__PURE__ */ React.createElement("div", { style: { background: "#1e293b", border: "1px solid #6366f1", borderRadius: 20, padding: 24, width: "100%", maxWidth: 340, animation: "popIn .3s ease" } }, /* @__PURE__ */ React.createElement("div", { style: { color: "#e2e8f0", fontWeight: 900, fontSize: 17, marginBottom: 4 } }, editUser.role === "admin" ? "\u{1F451}" : "\u{1F3E2}", " Edit Akun ", editUser.role === "admin" ? "Admin" : "Owner"), /* @__PURE__ */ React.createElement("div", { style: { color: "#64748b", fontSize: 12, marginBottom: 18 } }, "Perubahan berlaku saat login berikutnya"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 12 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: { display: "block", color: "#94a3b8", fontSize: 12, fontWeight: 600, marginBottom: 5 } }, "Nama Tampilan"), /* @__PURE__ */ React.createElement(
+    "input",
+    {
+      value: editUser.nama,
+      onChange: (e) => setEditUser((u) => ({ ...u, nama: e.target.value })),
+      placeholder: "Nama tampilan...",
+      style: IS
+    }
+  )), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: { display: "block", color: "#94a3b8", fontSize: 12, fontWeight: 600, marginBottom: 5 } }, "Username"), /* @__PURE__ */ React.createElement(
+    "input",
+    {
+      value: editUser.username,
+      onChange: (e) => setEditUser((u) => ({ ...u, username: e.target.value.toLowerCase().replace(/\s/g, "") })),
+      placeholder: "Username...",
+      autoCapitalize: "none",
+      style: IS
+    }
+  )), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: { display: "block", color: "#94a3b8", fontSize: 12, fontWeight: 600, marginBottom: 5 } }, "Password Baru"), /* @__PURE__ */ React.createElement("div", { style: { position: "relative" } }, /* @__PURE__ */ React.createElement(
+    "input",
+    {
+      type: showPassIdx === editUser.idx ? "text" : "password",
+      value: editUser.password,
+      onChange: (e) => setEditUser((u) => ({ ...u, password: e.target.value })),
+      placeholder: "Password baru...",
+      style: { ...IS, paddingRight: 44 }
+    }
+  ), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      onClick: () => setShowPassIdx((i) => i === editUser.idx ? null : editUser.idx),
+      style: { position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: "#64748b", cursor: "pointer", fontSize: 16, padding: 0 }
+    },
+    showPassIdx === editUser.idx ? "\u{1F648}" : "\u{1F441}\uFE0F"
+  )))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, marginTop: 20 } }, /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      onClick: () => {
+        setEditUser(null);
+        setShowPassIdx(null);
+      },
+      style: { flex: 1, padding: "11px", borderRadius: 10, border: "1px solid #475569", background: "transparent", color: "#94a3b8", cursor: "pointer", fontWeight: 700 }
+    },
+    "Batal"
+  ), /* @__PURE__ */ React.createElement("button", { onClick: () => {
+    const u = editUser;
+    if (!u.username.trim()) {
+      showToast("Username tidak boleh kosong", "err");
+      return;
+    }
+    if (!u.password.trim()) {
+      showToast("Password tidak boleh kosong", "err");
+      return;
+    }
+    if (u.password.length < 4) {
+      showToast("Password minimal 4 karakter", "err");
+      return;
+    }
+    const dup = users.find((x, i) => i !== u.idx && x.username === u.username.trim());
+    if (dup) {
+      showToast("Username sudah dipakai", "err");
+      return;
+    }
+    const newUsers = users.map((x, i) => i === u.idx ? { ...x, username: u.username.trim(), password: u.password.trim(), nama: u.nama.trim() || x.nama } : x);
+    setUsers(newUsers);
+    fbSaveSetting("users", { list: newUsers });
+    addAudit("SETTING", `Akun ${u.role} diperbarui: username="${u.username}" oleh Owner`);
+    showToast("Akun berhasil diperbarui! \u2705");
+    setEditUser(null);
+    setShowPassIdx(null);
+  }, style: { flex: 1, padding: "11px", borderRadius: 10, border: "none", background: "linear-gradient(90deg,#4f46e5,#7c3aed)", color: "#fff", cursor: "pointer", fontWeight: 800 } }, "\u{1F4BE} Simpan")))), showAudit && /* @__PURE__ */ React.createElement("div", { onClick: () => setShowAudit(false), style: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.82)", zIndex: 9997, display: "flex", alignItems: "flex-end", justifyContent: "center" } }, /* @__PURE__ */ React.createElement("div", { onClick: (e) => e.stopPropagation(), style: { background: "#1e293b", borderRadius: "20px 20px 0 0", width: "100%", maxWidth: 480, height: "78vh", display: "flex", flexDirection: "column", border: "1px solid #334155" } }, /* @__PURE__ */ React.createElement("div", { style: { padding: "14px 18px 12px", borderBottom: "1px solid #0f172a", flexShrink: 0 } }, /* @__PURE__ */ React.createElement("div", { style: { width: 40, height: 4, background: "#475569", borderRadius: 2, margin: "0 auto 10px" } }), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { color: "#e2e8f0", fontWeight: 900, fontSize: 17 } }, "\u{1F514} Riwayat Aktivitas Admin"), /* @__PURE__ */ React.createElement("div", { style: { color: "#64748b", fontSize: 12, marginTop: 2 } }, auditLog.length, " aktivitas tercatat")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center" } }, auditLog.length > 0 && /* @__PURE__ */ React.createElement("button", { onClick: () => setAuditLog([]), style: { padding: "5px 10px", borderRadius: 8, border: "1px solid #ef4444", background: "transparent", color: "#ef4444", cursor: "pointer", fontWeight: 700, fontSize: 11 } }, "Hapus Log"), /* @__PURE__ */ React.createElement("button", { onClick: () => setShowAudit(false), style: { width: 30, height: 30, borderRadius: "50%", border: "1px solid #475569", background: "#0f172a", color: "#94a3b8", cursor: "pointer", fontSize: 15, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, flexShrink: 0 } }, "\u2715")))), /* @__PURE__ */ React.createElement("div", { style: { overflowY: "auto", flex: 1, padding: "8px 16px 20px" } }, auditLog.length === 0 ? /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", padding: "40px 0", color: "#475569" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 36, marginBottom: 8 } }, "\u{1F4CB}"), /* @__PURE__ */ React.createElement("div", null, "Belum ada aktivitas tercatat")) : auditLog.map((log, i) => /* @__PURE__ */ React.createElement("div", { key: log.id, style: {
+    padding: "12px 14px",
+    marginTop: 8,
+    borderRadius: 12,
+    background: log.aksi === "HAPUS" ? "#7f1d1d30" : log.aksi === "SETTING" ? "#1e1b4b40" : "#1e3a5f40",
+    border: `1px solid ${log.aksi === "HAPUS" ? "#ef444430" : log.aksi === "SETTING" ? "#6366f130" : "#3b82f630"}`
+  } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, marginBottom: 5 } }, /* @__PURE__ */ React.createElement("span", { style: {
+    padding: "3px 8px",
+    borderRadius: 6,
+    fontSize: 11,
+    fontWeight: 800,
+    background: log.aksi === "HAPUS" ? "#ef4444" : log.aksi === "SETTING" ? "#6366f1" : "#f59e0b",
+    color: "#fff"
+  } }, log.aksi === "HAPUS" ? "\u{1F5D1}\uFE0F HAPUS" : log.aksi === "SETTING" ? "\u2699\uFE0F SETTING" : "\u270F\uFE0F EDIT"), /* @__PURE__ */ React.createElement("span", { style: { color: "#64748b", fontSize: 11, flexShrink: 0 } }, log.waktu)), /* @__PURE__ */ React.createElement("div", { style: { color: "#e2e8f0", fontSize: 13, lineHeight: 1.5 } }, log.detail), /* @__PURE__ */ React.createElement("div", { style: { color: "#64748b", fontSize: 11, marginTop: 4 } }, "oleh: ", log.oleh)))))), toast && /* @__PURE__ */ React.createElement("div", { style: { position: "fixed", top: 20, right: 20, zIndex: 9999, background: toast.type === "err" ? "#ef4444" : "#22c55e", color: "#fff", padding: "12px 22px", borderRadius: 10, fontWeight: 700, fontSize: 14, boxShadow: "0 4px 20px rgba(0,0,0,0.4)", animation: "slideIn .3s ease" } }, toast.msg), savedPopup && /* @__PURE__ */ React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.8)", zIndex: 9998, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 24px" } }, /* @__PURE__ */ React.createElement("div", { style: { background: "#1e293b", border: "1px solid #22c55e", borderRadius: 20, padding: 28, textAlign: "center", width: "100%", maxWidth: 320, animation: "popIn .3s ease" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 56, marginBottom: 8 } }, "\u2705"), /* @__PURE__ */ React.createElement("div", { style: { color: "#22c55e", fontWeight: 900, fontSize: 20, marginBottom: 4 } }, "Kasbon Tersimpan!"), /* @__PURE__ */ React.createElement("div", { style: { color: "#e2e8f0", fontWeight: 700, fontSize: 22, margin: "10px 0 4px" } }, fmt(savedPopup.jumlah)), /* @__PURE__ */ React.createElement("div", { style: { color: "#94a3b8", fontSize: 14, marginBottom: 4 } }, savedPopup.nama), /* @__PURE__ */ React.createElement("div", { style: { color: "#64748b", fontSize: 13, marginBottom: 4 } }, "\u{1F4C5} ", fmtTgl(savedPopup.tgl)), savedPopup.keterangan && /* @__PURE__ */ React.createElement("div", { style: { color: "#94a3b8", fontSize: 13, fontStyle: "italic", marginBottom: 12 } }, '"', savedPopup.keterangan, '"'), /* @__PURE__ */ React.createElement("button", { onClick: () => setSavedPopup(null), style: {
+    marginTop: 8,
+    width: "100%",
+    padding: "13px",
+    borderRadius: 12,
+    border: "none",
+    cursor: "pointer",
+    background: "linear-gradient(90deg,#16a34a,#22c55e)",
+    color: "#fff",
+    fontWeight: 800,
+    fontSize: 15
+  } }, "OK"))), limitPopup && /* @__PURE__ */ React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 9998, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 20px" } }, /* @__PURE__ */ React.createElement("div", { style: { background: "#1e293b", border: "2px solid #ef4444", borderRadius: 20, padding: 24, textAlign: "center", width: "100%", maxWidth: 320, animation: "popIn .3s ease" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 52, marginBottom: 6 } }, "\u{1F6AB}"), /* @__PURE__ */ React.createElement("div", { style: { color: "#ef4444", fontWeight: 900, fontSize: 18, marginBottom: 4 } }, "Kasbon Ditolak!"), /* @__PURE__ */ React.createElement("div", { style: { color: "#f59e0b", fontWeight: 700, fontSize: 15, marginBottom: 14 } }, limitPopup.nama), /* @__PURE__ */ React.createElement("div", { style: { background: "#0f172a", borderRadius: 12, padding: "14px 16px", textAlign: "left", marginBottom: 14 } }, [
+    ["Limit / bulan", fmt(limitPopup.limit), "#94a3b8"],
+    ["Sudah diambil", fmt(limitPopup.sudah), "#f59e0b"],
+    ["Diminta sekarang", fmt(limitPopup.akan), "#e2e8f0"],
+    ["Sisa limit", fmt(limitPopup.sisa), limitPopup.sisa > 0 ? "#22c55e" : "#ef4444"]
+  ].map(([l, v, c], i) => /* @__PURE__ */ React.createElement("div", { key: i, style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 0", borderBottom: i < 3 ? "1px solid #1e293b" : "none" } }, /* @__PURE__ */ React.createElement("span", { style: { color: "#64748b", fontSize: 13 } }, l), /* @__PURE__ */ React.createElement("span", { style: { color: c, fontWeight: 700, fontSize: 13 } }, v)))), /* @__PURE__ */ React.createElement("div", { style: { color: "#94a3b8", fontSize: 13, marginBottom: 16 } }, limitPopup.sisa > 0 ? "Jumlah melebihi sisa limit. Sesuaikan jumlah kasbon." : "Limit kasbon bulan ini sudah habis."), /* @__PURE__ */ React.createElement("button", { onClick: () => setLimitPopup(null), style: { width: "100%", padding: "12px", borderRadius: 12, border: "none", cursor: "pointer", background: "#ef4444", color: "#fff", fontWeight: 800, fontSize: 14 } }, "Tutup"))), confirmDel && /* @__PURE__ */ React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 9998, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 24px" } }, /* @__PURE__ */ React.createElement("div", { style: { background: "#1e293b", border: "1px solid #334155", borderRadius: 16, padding: 28, textAlign: "center", width: "100%", maxWidth: 300 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 38, marginBottom: 10 } }, "\u{1F5D1}\uFE0F"), /* @__PURE__ */ React.createElement("div", { style: { color: "#f1f5f9", fontWeight: 800, fontSize: 17, marginBottom: 8 } }, "Hapus Kasbon?"), /* @__PURE__ */ React.createElement("div", { style: { color: "#94a3b8", fontSize: 13, marginBottom: 22 } }, "Data ini akan dihapus permanen."), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setConfirmDel(null), style: { flex: 1, padding: "9px", borderRadius: 9, border: "1px solid #475569", background: "transparent", color: "#94a3b8", cursor: "pointer", fontWeight: 700 } }, "Batal"), /* @__PURE__ */ React.createElement("button", { onClick: () => handleDel(confirmDel), style: { flex: 1, padding: "9px", borderRadius: 9, border: "none", background: "#ef4444", color: "#fff", cursor: "pointer", fontWeight: 800 } }, "Hapus")))), confirmDelEmp && /* @__PURE__ */ React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 9998, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 24px" } }, /* @__PURE__ */ React.createElement("div", { style: { background: "#1e293b", border: "1px solid #334155", borderRadius: 16, padding: 28, textAlign: "center", width: "100%", maxWidth: 300 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 38, marginBottom: 10 } }, "\u{1F464}"), /* @__PURE__ */ React.createElement("div", { style: { color: "#f1f5f9", fontWeight: 800, fontSize: 17, marginBottom: 6 } }, "Hapus Karyawan?"), /* @__PURE__ */ React.createElement("div", { style: { color: "#f59e0b", fontWeight: 700, fontSize: 15, marginBottom: 6 } }, confirmDelEmp), /* @__PURE__ */ React.createElement("div", { style: { color: "#94a3b8", fontSize: 12, marginBottom: 22 } }, "Riwayat kasbon tetap tersimpan."), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setConfirmDelEmp(null), style: { flex: 1, padding: "9px", borderRadius: 9, border: "1px solid #475569", background: "transparent", color: "#94a3b8", cursor: "pointer", fontWeight: 700 } }, "Batal"), /* @__PURE__ */ React.createElement("button", { onClick: () => handleDelEmp(confirmDelEmp), style: { flex: 1, padding: "9px", borderRadius: 9, border: "none", background: "#ef4444", color: "#fff", cursor: "pointer", fontWeight: 800 } }, "Hapus")))), editLimitEmp && /* @__PURE__ */ React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.8)", zIndex: 9998, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 20px" } }, /* @__PURE__ */ React.createElement("div", { style: { background: "#1e293b", border: "1px solid #f59e0b", borderRadius: 18, padding: 24, width: "100%", maxWidth: 320 } }, /* @__PURE__ */ React.createElement("div", { style: { color: "#e2e8f0", fontWeight: 900, fontSize: 16, marginBottom: 4 } }, "\u2699\uFE0F Atur Limit Kasbon"), /* @__PURE__ */ React.createElement("div", { style: { color: "#f59e0b", fontWeight: 700, fontSize: 14, marginBottom: 14 } }, editLimitEmp), /* @__PURE__ */ React.createElement("label", { style: LS }, "Batas Maksimal Kasbon / Bulan"), /* @__PURE__ */ React.createElement(LimitInput, { value: tempLimit, onChange: setTempLimit }), /* @__PURE__ */ React.createElement("div", { style: { color: "#64748b", fontSize: 12, marginTop: 6, marginBottom: 16 } }, "Kosongkan atau isi 0 untuk tanpa batas."), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setEditLimitEmp(null), style: { flex: 1, padding: "10px", borderRadius: 10, border: "1px solid #475569", background: "transparent", color: "#94a3b8", cursor: "pointer", fontWeight: 700 } }, "Batal"), /* @__PURE__ */ React.createElement("button", { onClick: () => {
+    const newLimits = { ...empLimits, [editLimitEmp]: tempLimit };
+    setEmpLimits(newLimits);
+    fbSaveSetting("limits", { data: newLimits });
+    setEditLimitEmp(null);
+    showToast(tempLimit > 0 ? `Limit ${fmt(tempLimit)}/bln disimpan` : "Limit dihapus");
+  }, style: { flex: 1, padding: "10px", borderRadius: 10, border: "none", background: "linear-gradient(90deg,#d97706,#f59e0b)", color: "#fff", cursor: "pointer", fontWeight: 800 } }, "Simpan")))), detailKary && /* @__PURE__ */ React.createElement("div", { onClick: () => setDetailKary(null), style: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.82)", zIndex: 9997, display: "flex", alignItems: "flex-end", justifyContent: "center" } }, /* @__PURE__ */ React.createElement("div", { onClick: (e) => e.stopPropagation(), style: { background: "#1e293b", borderRadius: "20px 20px 0 0", width: "100%", maxWidth: 480, height: "70vh", display: "flex", flexDirection: "column", border: "1px solid #334155", overflow: "hidden" } }, /* @__PURE__ */ React.createElement("div", { style: { padding: "14px 18px 12px", borderBottom: "1px solid #0f172a", flexShrink: 0 } }, /* @__PURE__ */ React.createElement("div", { style: { width: 40, height: 4, background: "#475569", borderRadius: 2, margin: "0 auto 10px" } }), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { color: "#e2e8f0", fontWeight: 900, fontSize: 17 } }, detailKary), /* @__PURE__ */ React.createElement("div", { style: { color: "#64748b", fontSize: 12, marginTop: 2 } }, detailItems.length, "x kasbon \xA0\xB7\xA0 ", /* @__PURE__ */ React.createElement("span", { style: { color: "#f59e0b", fontWeight: 700 } }, fmt(rekapByKary[detailKary].total)))), /* @__PURE__ */ React.createElement("button", { onClick: () => setDetailKary(null), style: { width: 32, height: 32, borderRadius: "50%", border: "1px solid #475569", background: "#0f172a", color: "#94a3b8", cursor: "pointer", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, flexShrink: 0 } }, "\u2715"))), /* @__PURE__ */ React.createElement("div", { style: { overflowY: "auto", flex: 1, padding: "0 18px 20px" } }, detailItems.map((rec, i) => /* @__PURE__ */ React.createElement("div", { key: rec.id, style: { padding: "12px 0", borderBottom: i < detailItems.length - 1 ? "1px solid #0f172a" : "none" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 0 } }, /* @__PURE__ */ React.createElement("div", { style: { color: "#94a3b8", fontSize: 12 } }, "\u{1F4C5} ", fmtTgl(rec.tanggal)), rec.keterangan && /* @__PURE__ */ React.createElement("div", { style: { color: "#cbd5e1", fontSize: 13, marginTop: 3, fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, '"', rec.keterangan, '"')), /* @__PURE__ */ React.createElement("div", { style: { color: "#f59e0b", fontWeight: 900, fontSize: 15, flexShrink: 0 } }, fmt(rec.jumlah)))))))), /* @__PURE__ */ React.createElement("div", { style: { background: "linear-gradient(90deg,#1e40af,#0ea5e9)", padding: "16px 16px 14px", boxShadow: "0 4px 30px rgba(0,0,0,0.4)" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 7, background: "rgba(0,0,0,0.25)", borderRadius: 20, padding: "5px 12px" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 14 } }, isAdmin ? "\u{1F451}" : "\u{1F3E2}"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { color: "#fff", fontWeight: 700, fontSize: 12 } }, currentUser.nama), /* @__PURE__ */ React.createElement("div", { style: { color: "#bae6fd", fontSize: 10, textTransform: "uppercase", letterSpacing: 1 } }, currentUser.role))), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      onClick: () => setConfirmLogout(true),
+      style: { display: "flex", alignItems: "center", gap: 5, background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.3)", borderRadius: 20, padding: "6px 14px", color: "#fff", cursor: "pointer", fontWeight: 700, fontSize: 12 }
+    },
+    "\u{1F6AA} Logout"
+  )), /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", position: "relative" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 26, marginBottom: 2 } }, "\u{1F4BC}"), /* @__PURE__ */ React.createElement("h1", { style: { color: "#fff", margin: 0, fontSize: 20, fontWeight: 900, letterSpacing: 1 } }, "KASBON KARYAWAN"), /* @__PURE__ */ React.createElement("p", { style: { color: "#bae6fd", margin: "2px 0 0", fontSize: 11 } }, "Pencatatan Kasbon Karyawan"), isFirebaseMode && /* @__PURE__ */ React.createElement("div", { style: {
+    marginTop: 5,
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 4,
+    background: "rgba(0,0,0,0.25)",
+    borderRadius: 20,
+    padding: "3px 10px"
+  } }, /* @__PURE__ */ React.createElement("span", { style: { width: 7, height: 7, borderRadius: "50%", background: fbReady ? "#22c55e" : fbError ? "#ef4444" : "#f59e0b", display: "inline-block" } }), /* @__PURE__ */ React.createElement("span", { style: { color: "#bae6fd", fontSize: 10 } }, fbReady ? "Cloud Sync Aktif" : fbError ? "Sync Error \u2014 mode offline" : "Menghubungkan...")), !isFirebaseMode && /* @__PURE__ */ React.createElement("div", { style: {
+    marginTop: 5,
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 4,
+    background: "rgba(255,165,0,0.2)",
+    borderRadius: 20,
+    padding: "3px 10px",
+    border: "1px solid #f59e0b50"
+  } }, /* @__PURE__ */ React.createElement("span", { style: { color: "#fcd34d", fontSize: 10 } }, "\u26A0\uFE0F Mode Lokal \u2014 isi Firebase config untuk sync")), isOwner && /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      onClick: () => {
+        setShowAudit(true);
+        setAuditLog((prev) => prev.map((l) => ({ ...l, read: true })));
+      },
+      style: { position: "absolute", right: 0, top: 0, background: "rgba(0,0,0,0.25)", border: "none", borderRadius: "50%", width: 34, height: 34, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }
+    },
+    "\u{1F514}",
+    unreadAudit > 0 && /* @__PURE__ */ React.createElement("span", { style: { position: "absolute", top: 2, right: 2, background: "#ef4444", color: "#fff", borderRadius: "50%", width: 16, height: 16, fontSize: 10, fontWeight: 900, display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1 } }, unreadAudit > 9 ? "9+" : unreadAudit)
+  ))), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, padding: "14px 14px 0" } }, [
+    { label: "Total Karyawan", value: employees.length + " orang", icon: "\u{1F465}", color: "#3b82f6" },
+    { label: "Total Kasbon", value: fmt(totalAll), icon: "\u{1F4B0}", color: "#f59e0b" },
+    { label: "Jumlah Transaksi", value: records.length + " transaksi", icon: "\u{1F4CB}", color: "#a78bfa" },
+    { label: "Rata-rata / Trx", value: records.length ? fmt(Math.round(totalAll / records.length)) : "Rp 0", icon: "\u{1F4CA}", color: "#34d399" }
+  ].map((c, i) => /* @__PURE__ */ React.createElement("div", { key: i, style: { background: "#1e293b", borderRadius: 12, padding: "12px 10px", border: `1px solid ${c.color}30` } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 20 } }, c.icon), /* @__PURE__ */ React.createElement("div", { style: { color: c.color, fontWeight: 900, fontSize: 13, marginTop: 3 } }, c.value), /* @__PURE__ */ React.createElement("div", { style: { color: "#64748b", fontSize: 11, marginTop: 1 } }, c.label)))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", margin: "14px 14px 0", background: "#0f172a", borderRadius: 12, padding: 3, border: "1px solid #1e293b" } }, [["input", "\u270F\uFE0F"], ["daftar", "\u{1F4CB}"], ["rekap", "\u{1F4CA}"], ["karyawan", "\u{1F465}"], ["setting", "\u2699\uFE0F"]].map(([k, l]) => /* @__PURE__ */ React.createElement("button", { key: k, onClick: () => setTab(k), style: { flex: 1, padding: "9px 2px", borderRadius: 9, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700, background: tab === k ? "linear-gradient(90deg,#1d4ed8,#0ea5e9)" : "transparent", color: tab === k ? "#fff" : "#64748b", transition: "all .2s" } }, l))), /* @__PURE__ */ React.createElement("div", { style: { padding: "14px 14px 0" } }, tab === "input" && /* @__PURE__ */ React.createElement("div", { style: { background: "#1e293b", borderRadius: 16, padding: 18, border: "1px solid #334155" } }, /* @__PURE__ */ React.createElement("h2", { style: { color: "#e2e8f0", fontWeight: 800, fontSize: 15, margin: "0 0 14px" } }, editId ? "\u270F\uFE0F Edit Kasbon" : "\u2795 Input Kasbon Baru"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 12 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: LS }, "Karyawan *"), /* @__PURE__ */ React.createElement("select", { name: "karyawan", value: form.karyawan, onChange: hChange, style: IS }, /* @__PURE__ */ React.createElement("option", { value: "" }, "-- Pilih Karyawan --"), employees.map((e) => /* @__PURE__ */ React.createElement("option", { key: e, value: e }, e)))), form.karyawan && formLimit > 0 && /* @__PURE__ */ React.createElement("div", { style: { background: formOverLimit ? "#7f1d1d" : "#0f172a", border: `1px solid ${formOverLimit ? "#ef4444" : "#334155"}`, borderRadius: 10, padding: "10px 12px" } }, formBulan && /* @__PURE__ */ React.createElement("div", { style: { color: "#64748b", fontSize: 11, marginBottom: 8, fontWeight: 600 } }, "\u{1F4C5} Penggunaan bulan ", formBulan), !formBulan && /* @__PURE__ */ React.createElement("div", { style: { color: "#64748b", fontSize: 11, marginBottom: 8 } }, "\u26A0\uFE0F Pilih tanggal untuk lihat sisa limit bulan ini"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: 4 } }, /* @__PURE__ */ React.createElement("span", { style: { color: "#64748b", fontSize: 12 } }, "Limit / bulan"), /* @__PURE__ */ React.createElement("span", { style: { color: "#f59e0b", fontWeight: 700, fontSize: 12 } }, fmt(formLimit))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: 4 } }, /* @__PURE__ */ React.createElement("span", { style: { color: "#64748b", fontSize: 12 } }, "Sudah diambil", formBulan ? ` (${formBulan})` : ""), /* @__PURE__ */ React.createElement("span", { style: { color: formSudah > 0 ? "#fb923c" : "#e2e8f0", fontWeight: 700, fontSize: 12 } }, fmt(formSudah))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: 6 } }, /* @__PURE__ */ React.createElement("span", { style: { color: "#64748b", fontSize: 12 } }, "Sisa limit"), /* @__PURE__ */ React.createElement("span", { style: { color: !formBulan ? "#64748b" : formSisa === 0 ? "#ef4444" : "#22c55e", fontWeight: 700, fontSize: 12 } }, formBulan ? fmt(formSisa) : "\u2014")), formBulan && /* @__PURE__ */ React.createElement("div", { style: { height: 5, background: "#1e293b", borderRadius: 3, overflow: "hidden" } }, /* @__PURE__ */ React.createElement("div", { style: { height: "100%", width: `${Math.min(formSudah / formLimit * 100, 100)}%`, background: formOverLimit ? "#ef4444" : "linear-gradient(90deg,#22c55e,#16a34a)", borderRadius: 3, transition: "width .3s" } })), formOverLimit && /* @__PURE__ */ React.createElement("div", { style: { color: "#fca5a5", fontSize: 12, marginTop: 5, fontWeight: 600 } }, "\u26A0\uFE0F Jumlah melebihi sisa limit!")), form.karyawan && (empLimits[form.karyawan] || 0) === 0 && /* @__PURE__ */ React.createElement("div", { style: { background: "#0f172a", border: "1px solid #334155", borderRadius: 10, padding: "8px 12px" } }, /* @__PURE__ */ React.createElement("span", { style: { color: "#64748b", fontSize: 12 } }, "\u2139\uFE0F Tidak ada batas limit untuk karyawan ini")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: LS }, "Tanggal *"), /* @__PURE__ */ React.createElement(
+    "input",
+    {
+      type: "date",
+      name: "tanggal",
+      value: form.tanggal,
+      onChange: hChange,
+      style: { ...IS, colorScheme: "dark", color: form.tanggal ? "#e2e8f0" : "#64748b" }
+    }
+  )), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: LS }, "Jumlah Kasbon (Rp) *"), /* @__PURE__ */ React.createElement(JumlahInput, { value: form.jumlah, onChange: (v) => setForm((f) => ({ ...f, jumlah: v })), quickAmounts: quickAmts })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: LS }, "Keterangan"), /* @__PURE__ */ React.createElement(KetInput, { value: form.keterangan, onChange: (v) => setForm((f) => ({ ...f, keterangan: v })), templates: ketTpls })), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, marginTop: 4 } }, /* @__PURE__ */ React.createElement("button", { onClick: handleSubmit, style: {
+    flex: 1,
+    padding: "13px",
+    borderRadius: 10,
+    border: "none",
+    cursor: "pointer",
+    background: formOverLimit ? "#475569" : "linear-gradient(90deg,#1d4ed8,#0ea5e9)",
+    color: "#fff",
+    fontWeight: 800,
+    fontSize: 14,
+    opacity: formOverLimit ? 0.6 : 1
+  } }, editId ? "\u{1F4BE} Simpan Perubahan" : "\u2705 Simpan Kasbon"), editId && /* @__PURE__ */ React.createElement("button", { onClick: resetForm, style: { padding: "13px 16px", borderRadius: 10, border: "1px solid #475569", background: "transparent", color: "#94a3b8", cursor: "pointer", fontWeight: 700 } }, "Batal")))), tab === "daftar" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { background: "#1e293b", borderRadius: 14, padding: 14, marginBottom: 12, border: "1px solid #334155" } }, /* @__PURE__ */ React.createElement("div", { style: { color: "#94a3b8", fontSize: 12, fontWeight: 700, marginBottom: 8 } }, "\u{1F50D} FILTER & CARI"), /* @__PURE__ */ React.createElement("input", { value: search, onChange: (e) => setSearch(e.target.value), placeholder: "\u{1F50D} Cari nama / keterangan...", style: { ...IS, marginBottom: 8 } }), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 7 } }, /* @__PURE__ */ React.createElement("select", { value: fKary, onChange: (e) => setFKary(e.target.value), style: IS }, /* @__PURE__ */ React.createElement("option", { value: "" }, "Semua Karyawan"), employees.map((e) => /* @__PURE__ */ React.createElement("option", { key: e, value: e }, e))), /* @__PURE__ */ React.createElement("select", { value: fBulan, onChange: (e) => setFBulan(e.target.value), style: IS }, /* @__PURE__ */ React.createElement("option", { value: "" }, "Semua Bulan"), MONTHS.slice(1).map((m, i) => /* @__PURE__ */ React.createElement("option", { key: i + 1, value: String(i + 1).padStart(2, "0") }, m))), /* @__PURE__ */ React.createElement("select", { value: fTahun, onChange: (e) => setFTahun(e.target.value), style: { ...IS, gridColumn: "1/-1" } }, /* @__PURE__ */ React.createElement("option", { value: "" }, "Semua Tahun"), years.map((y) => /* @__PURE__ */ React.createElement("option", { key: y, value: y }, y)))), (fKary || fBulan || fTahun || search) && /* @__PURE__ */ React.createElement("button", { onClick: () => {
+    setFKary("");
+    setFBulan("");
+    setFTahun("");
+    setSearch("");
+  }, style: { marginTop: 8, width: "100%", padding: "7px", borderRadius: 8, border: "1px solid #ef4444", background: "transparent", color: "#ef4444", cursor: "pointer", fontWeight: 700, fontSize: 12 } }, "\u2715 Reset Filter")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 12 } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1, background: "#1e293b", borderRadius: 10, padding: "10px 12px", border: "1px solid #334155" } }, /* @__PURE__ */ React.createElement("div", { style: { color: "#64748b", fontSize: 11 } }, "Hasil"), /* @__PURE__ */ React.createElement("div", { style: { color: "#f1f5f9", fontWeight: 800 } }, filtered.length, " data")), /* @__PURE__ */ React.createElement("div", { style: { flex: 2, background: "#1e293b", borderRadius: 10, padding: "10px 12px", border: "1px solid #f59e0b40" } }, /* @__PURE__ */ React.createElement("div", { style: { color: "#64748b", fontSize: 11 } }, "Total Kasbon"), /* @__PURE__ */ React.createElement("div", { style: { color: "#f59e0b", fontWeight: 800 } }, fmt(totalFiltered)))), filtered.length === 0 ? /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", padding: "40px 20px", color: "#475569" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 40 } }, "\u{1F4ED}"), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 8 } }, "Tidak ada data")) : [...filtered].sort((a, b) => b.tanggal.localeCompare(a.tanggal)).map((rec) => /* @__PURE__ */ React.createElement("div", { key: rec.id, style: { background: "#1e293b", borderRadius: 14, padding: 14, marginBottom: 10, border: "1px solid #334155", borderLeft: "4px solid #0ea5e9" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 0 } }, /* @__PURE__ */ React.createElement("div", { style: { color: "#e2e8f0", fontWeight: 800, fontSize: 14 } }, rec.karyawan), /* @__PURE__ */ React.createElement("div", { style: { color: "#64748b", fontSize: 12, marginTop: 3 } }, "\u{1F4C5} ", fmtTgl(rec.tanggal)), rec.keterangan && /* @__PURE__ */ React.createElement("div", { style: { color: "#94a3b8", fontSize: 13, marginTop: 5, fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, '"', rec.keterangan, '"')), /* @__PURE__ */ React.createElement("div", { style: { textAlign: "right", flexShrink: 0 } }, /* @__PURE__ */ React.createElement("div", { style: { color: "#f59e0b", fontWeight: 900, fontSize: 15 } }, fmt(rec.jumlah)))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 7, marginTop: 10 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => handleEdit(rec), style: { flex: 1, padding: "7px", borderRadius: 8, border: "1px solid #3b82f6", background: "transparent", color: "#3b82f6", cursor: "pointer", fontWeight: 700, fontSize: 12 } }, "\u270F\uFE0F Edit"), /* @__PURE__ */ React.createElement("button", { onClick: () => setConfirmDel(rec.id), style: { flex: 1, padding: "7px", borderRadius: 8, border: "1px solid #ef4444", background: "transparent", color: "#ef4444", cursor: "pointer", fontWeight: 700, fontSize: 12 } }, "\u{1F5D1}\uFE0F Hapus"))))), tab === "rekap" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { background: "#1e293b", borderRadius: 14, padding: 14, marginBottom: 12, border: "1px solid #334155" } }, /* @__PURE__ */ React.createElement("div", { style: { color: "#94a3b8", fontSize: 12, fontWeight: 700, marginBottom: 8 } }, "\u{1F4CA} FILTER REKAP"), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 7 } }, /* @__PURE__ */ React.createElement("select", { value: fKary, onChange: (e) => setFKary(e.target.value), style: IS }, /* @__PURE__ */ React.createElement("option", { value: "" }, "Semua Karyawan"), employees.map((e) => /* @__PURE__ */ React.createElement("option", { key: e, value: e }, e))), /* @__PURE__ */ React.createElement("select", { value: fBulan, onChange: (e) => setFBulan(e.target.value), style: IS }, /* @__PURE__ */ React.createElement("option", { value: "" }, "Semua Bulan"), MONTHS.slice(1).map((m, i) => /* @__PURE__ */ React.createElement("option", { key: i + 1, value: String(i + 1).padStart(2, "0") }, m))), /* @__PURE__ */ React.createElement("select", { value: fTahun, onChange: (e) => setFTahun(e.target.value), style: { ...IS, gridColumn: "1/-1" } }, /* @__PURE__ */ React.createElement("option", { value: "" }, "Semua Tahun"), years.map((y) => /* @__PURE__ */ React.createElement("option", { key: y, value: y }, y)))), (fKary || fBulan || fTahun) && /* @__PURE__ */ React.createElement("button", { onClick: () => {
+    setFKary("");
+    setFBulan("");
+    setFTahun("");
+  }, style: { marginTop: 8, width: "100%", padding: "7px", borderRadius: 8, border: "1px solid #ef4444", background: "transparent", color: "#ef4444", cursor: "pointer", fontWeight: 700, fontSize: 12 } }, "\u2715 Reset")), /* @__PURE__ */ React.createElement("div", { style: { background: "#1e293b", borderRadius: 14, padding: 14, marginBottom: 12, border: "1px solid #334155" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { color: "#e2e8f0", fontWeight: 800, fontSize: 14 } }, "\u{1F465} Rekap per Karyawan"), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      onClick: () => Object.keys(rekapByKary).length > 0 ? exportExcel("rekap_karyawan") : showToast("Tidak ada data", "err"),
+      style: { display: "flex", alignItems: "center", gap: 5, padding: "6px 12px", borderRadius: 8, border: "1px solid #22c55e60", background: "#0f172a", color: "#22c55e", cursor: "pointer", fontWeight: 700, fontSize: 12 }
+    },
+    "\u{1F4E5} Excel"
+  )), Object.keys(rekapByKary).length === 0 ? /* @__PURE__ */ React.createElement("div", { style: { color: "#475569", textAlign: "center", padding: 20 } }, "Tidak ada data") : Object.entries(rekapByKary).sort((a, b) => b[1].total - a[1].total).map(([nama, stat], i, arr) => {
+    const pct = totalFiltered > 0 ? Math.round(stat.total / totalFiltered * 100) : 0;
+    const lim = empLimits[nama] || 0;
+    const rows = [...stat.items].sort((a, b) => b.tanggal.localeCompare(a.tanggal));
+    return /* @__PURE__ */ React.createElement("div", { key: nama, style: {
+      marginBottom: i < arr.length - 1 ? 14 : 0,
+      paddingBottom: i < arr.length - 1 ? 14 : 0,
+      borderBottom: i < arr.length - 1 ? "1px solid #0f172a" : "none"
+    } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 6 } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 0 } }, /* @__PURE__ */ React.createElement("div", { style: { color: "#e2e8f0", fontWeight: 800, fontSize: 14 } }, nama), lim > 0 && /* @__PURE__ */ React.createElement("div", { style: { color: "#64748b", fontSize: 11 } }, "Limit ", fmt(lim), "/bln")), /* @__PURE__ */ React.createElement("div", { style: { textAlign: "right", flexShrink: 0 } }, /* @__PURE__ */ React.createElement("div", { style: { color: "#64748b", fontSize: 11 } }, pct, "% dari total"))), /* @__PURE__ */ React.createElement("div", { style: { height: 4, background: "#0f172a", borderRadius: 3, overflow: "hidden", marginBottom: 8 } }, /* @__PURE__ */ React.createElement("div", { style: { height: "100%", width: `${pct}%`, background: "linear-gradient(90deg,#1d4ed8,#0ea5e9)", borderRadius: 3 } })), /* @__PURE__ */ React.createElement("div", { style: { background: "#0f172a", borderRadius: 10, overflow: "hidden" } }, rows.map((rec, ri) => /* @__PURE__ */ React.createElement("div", { key: rec.id, style: {
+      padding: "9px 12px",
+      borderBottom: ri < rows.length - 1 ? "1px solid #1e293b" : "none",
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      gap: 8
+    } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 0 } }, /* @__PURE__ */ React.createElement("div", { style: { color: "#94a3b8", fontSize: 12 } }, "\u{1F4C5} ", fmtTgl(rec.tanggal)), rec.keterangan && /* @__PURE__ */ React.createElement("div", { style: {
+      color: "#64748b",
+      fontSize: 11,
+      marginTop: 2,
+      fontStyle: "italic",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap"
+    } }, rec.keterangan)), /* @__PURE__ */ React.createElement("div", { style: { color: "#f59e0b", fontWeight: 700, fontSize: 13, flexShrink: 0 } }, fmt(rec.jumlah)))), /* @__PURE__ */ React.createElement("div", { style: { padding: "8px 12px", background: "#1e293b", display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("span", { style: { color: "#64748b", fontSize: 12, fontWeight: 600 } }, "Total ", nama.split(" ")[0], " \xA0\xB7\xA0 ", /* @__PURE__ */ React.createElement("span", { style: { color: "#94a3b8" } }, stat.count, "x kasbon")), /* @__PURE__ */ React.createElement("span", { style: { color: "#f59e0b", fontWeight: 900, fontSize: 13 } }, fmt(stat.total)))));
+  })), /* @__PURE__ */ React.createElement("div", { style: { background: "linear-gradient(135deg,#1e3a5f,#1e293b)", borderRadius: 14, padding: 18, border: "1px solid #3b82f6" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } }, /* @__PURE__ */ React.createElement("div", { style: { color: "#94a3b8", fontSize: 12, fontWeight: 700 } }, "\u{1F4B0} TOTAL KESELURUHAN"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6 } }, /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      onClick: () => filtered.length > 0 ? exportExcel("detail") : showToast("Tidak ada data", "err"),
+      style: { display: "flex", alignItems: "center", gap: 4, padding: "5px 10px", borderRadius: 8, border: "1px solid #3b82f660", background: "#0f172a", color: "#7dd3fc", cursor: "pointer", fontWeight: 700, fontSize: 11 }
+    },
+    "\u{1F4CB} Detail"
+  ), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      onClick: () => filtered.length > 0 ? exportExcel("semua") : showToast("Tidak ada data", "err"),
+      style: { display: "flex", alignItems: "center", gap: 4, padding: "5px 10px", borderRadius: 8, border: "none", background: "linear-gradient(90deg,#16a34a,#22c55e)", color: "#fff", cursor: "pointer", fontWeight: 700, fontSize: 11 }
+    },
+    "\u{1F4E5} Semua"
+  ))), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { background: "#0f172a", borderRadius: 10, padding: "12px", textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { color: "#64748b", fontSize: 11 } }, "Total Kasbon"), /* @__PURE__ */ React.createElement("div", { style: { color: "#f59e0b", fontWeight: 900, fontSize: 15, marginTop: 3 } }, fmt(totalFiltered))), /* @__PURE__ */ React.createElement("div", { style: { background: "#0f172a", borderRadius: 10, padding: "12px", textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { color: "#64748b", fontSize: 11 } }, "Jumlah Transaksi"), /* @__PURE__ */ React.createElement("div", { style: { color: "#a78bfa", fontWeight: 900, fontSize: 15, marginTop: 3 } }, filtered.length, "x"))), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10 } }, /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      onClick: () => filtered.length > 0 ? exportExcel("rekap_bulan") : showToast("Tidak ada data", "err"),
+      style: { padding: "9px", borderRadius: 9, border: "1px solid #334155", background: "#0f172a", color: "#94a3b8", cursor: "pointer", fontWeight: 700, fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 5 }
+    },
+    "\u{1F4C5} ",
+    /* @__PURE__ */ React.createElement("span", null, "Excel / Bulan")
+  ), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      onClick: () => filtered.length > 0 ? exportExcel("rekap_tahun") : showToast("Tidak ada data", "err"),
+      style: { padding: "9px", borderRadius: 9, border: "1px solid #334155", background: "#0f172a", color: "#94a3b8", cursor: "pointer", fontWeight: 700, fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 5 }
+    },
+    "\u{1F4C6} ",
+    /* @__PURE__ */ React.createElement("span", null, "Excel / Tahun")
+  )))), tab === "karyawan" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { background: "#1e293b", borderRadius: 14, padding: 14, marginBottom: 12, border: "1px solid #334155" } }, /* @__PURE__ */ React.createElement("div", { style: { color: "#e2e8f0", fontWeight: 800, fontSize: 14, marginBottom: 12 } }, "\u2795 Tambah Karyawan"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement("input", { value: newEmp, onChange: (e) => setNewEmp(e.target.value), onKeyDown: (e) => e.key === "Enter" && handleAddEmp(), placeholder: "Nama karyawan baru...", style: { ...IS, flex: 1 } }), /* @__PURE__ */ React.createElement("button", { onClick: handleAddEmp, style: { padding: "10px 14px", borderRadius: 10, border: "none", cursor: "pointer", background: "linear-gradient(90deg,#1d4ed8,#0ea5e9)", color: "#fff", fontWeight: 800, fontSize: 14, whiteSpace: "nowrap" } }, "+ Tambah"))), /* @__PURE__ */ React.createElement("input", { value: empSearch, onChange: (e) => setEmpSearch(e.target.value), placeholder: "\u{1F50D} Cari karyawan...", style: { ...IS, marginBottom: 12 } }), /* @__PURE__ */ React.createElement("div", { style: { background: "#1e293b", borderRadius: 14, padding: 14, border: "1px solid #334155" } }, /* @__PURE__ */ React.createElement("div", { style: { color: "#94a3b8", fontSize: 12, fontWeight: 700, marginBottom: 10 } }, "\u{1F465} DAFTAR KARYAWAN (", employees.length, " orang)"), filteredEmps.length === 0 ? /* @__PURE__ */ React.createElement("div", { style: { color: "#475569", textAlign: "center", padding: 20 } }, "Tidak ada karyawan") : filteredEmps.map((emp, i) => {
+    const empRec = records.filter((r) => r.karyawan === emp);
+    const empTotal = empRec.reduce((s, r) => s + r.jumlah, 0);
+    const lim = empLimits[emp] || 0;
+    return /* @__PURE__ */ React.createElement("div", { key: emp, style: { padding: "12px 0", borderBottom: i < filteredEmps.length - 1 ? "1px solid #0f172a" : "none" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0 } }, /* @__PURE__ */ React.createElement("div", { style: { width: 36, height: 36, borderRadius: "50%", background: "linear-gradient(135deg,#1d4ed8,#0ea5e9)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 900, fontSize: 14, flexShrink: 0 } }, emp.charAt(0).toUpperCase()), /* @__PURE__ */ React.createElement("div", { style: { minWidth: 0 } }, /* @__PURE__ */ React.createElement("div", { style: { color: "#e2e8f0", fontWeight: 700, fontSize: 13 } }, emp), /* @__PURE__ */ React.createElement("div", { style: { color: "#64748b", fontSize: 11 } }, empRec.length, " kasbon \xB7 ", empRec.length > 0 ? fmt(empTotal) : "\u2013"), lim > 0 ? /* @__PURE__ */ React.createElement("div", { style: { color: "#f59e0b", fontSize: 11, marginTop: 1 } }, "\u{1F512} Limit: ", fmt(lim), "/bln") : /* @__PURE__ */ React.createElement("div", { style: { color: "#475569", fontSize: 11, marginTop: 1 } }, "\u{1F513} Tanpa batas"))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, flexShrink: 0 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => {
+      setTempLimit(lim);
+      setEditLimitEmp(emp);
+    }, style: { padding: "5px 10px", borderRadius: 8, border: "1px solid #f59e0b", background: "transparent", color: "#f59e0b", cursor: "pointer", fontWeight: 700, fontSize: 12 } }, "\u2699\uFE0F Limit"), /* @__PURE__ */ React.createElement("button", { onClick: () => setConfirmDelEmp(emp), style: { padding: "5px 10px", borderRadius: 8, border: "1px solid #ef4444", background: "transparent", color: "#ef4444", cursor: "pointer", fontWeight: 700, fontSize: 12 } }, "Hapus"))));
+  }))), tab === "setting" && /* @__PURE__ */ React.createElement("div", null, isOwner && /* @__PURE__ */ React.createElement("div", { style: { background: "#1e293b", borderRadius: 14, padding: 14, marginBottom: 12, border: "1px solid #6366f1" } }, /* @__PURE__ */ React.createElement("div", { style: { color: "#e2e8f0", fontWeight: 800, fontSize: 14, marginBottom: 4 } }, "\u{1F510} Kelola Akun"), /* @__PURE__ */ React.createElement("div", { style: { color: "#64748b", fontSize: 12, marginBottom: 14 } }, "Atur username & password untuk masing-masing akun."), users.map((u, i) => /* @__PURE__ */ React.createElement("div", { key: i, style: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    background: "#0f172a",
+    borderRadius: 12,
+    padding: "12px 14px",
+    marginBottom: i < users.length - 1 ? 8 : 0,
+    border: `1px solid ${u.role === "admin" ? "#f59e0b30" : "#6366f130"}`
+  } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } }, /* @__PURE__ */ React.createElement("div", { style: {
+    width: 36,
+    height: 36,
+    borderRadius: "50%",
+    background: u.role === "admin" ? "linear-gradient(135deg,#d97706,#f59e0b)" : "linear-gradient(135deg,#4f46e5,#7c3aed)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: 16,
+    flexShrink: 0
+  } }, u.role === "admin" ? "\u{1F451}" : "\u{1F3E2}"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { color: "#e2e8f0", fontWeight: 700, fontSize: 13 } }, u.nama), /* @__PURE__ */ React.createElement("div", { style: { color: "#64748b", fontSize: 11 } }, "@", u.username, " \xB7 ", u.role))), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      onClick: () => setEditUser({ ...u, idx: i }),
+      style: { padding: "6px 12px", borderRadius: 8, border: "1px solid #6366f1", background: "transparent", color: "#818cf8", cursor: "pointer", fontWeight: 700, fontSize: 12 }
+    },
+    "\u270F\uFE0F Edit"
+  )))), isOwner && /* @__PURE__ */ React.createElement("div", { style: { background: "#1e293b", borderRadius: 14, padding: 14, marginBottom: 12, border: "1px solid #ef444440" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { color: "#e2e8f0", fontWeight: 800, fontSize: 14 } }, "\u{1F514} Log Aktivitas Admin"), /* @__PURE__ */ React.createElement("div", { style: { color: "#64748b", fontSize: 12, marginTop: 2 } }, auditLog.length, " aktivitas \xB7 Tap untuk lihat semua")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center" } }, unreadAudit > 0 && /* @__PURE__ */ React.createElement("span", { style: { background: "#ef4444", color: "#fff", borderRadius: "50%", width: 20, height: 20, fontSize: 11, fontWeight: 900, display: "flex", alignItems: "center", justifyContent: "center" } }, unreadAudit > 9 ? "9+" : unreadAudit), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      onClick: () => {
+        setShowAudit(true);
+        setAuditLog((prev) => prev.map((l) => ({ ...l, read: true })));
+      },
+      style: { padding: "6px 12px", borderRadius: 8, border: "1px solid #ef444460", background: "transparent", color: "#f87171", cursor: "pointer", fontWeight: 700, fontSize: 12 }
+    },
+    "Buka \u{1F514}"
+  ))), auditLog.slice(0, 2).map((log, i) => /* @__PURE__ */ React.createElement("div", { key: log.id, style: { marginTop: 8, background: "#0f172a", borderRadius: 10, padding: "8px 12px", borderLeft: `3px solid ${log.aksi === "HAPUS" ? "#ef4444" : log.aksi === "EDIT" ? "#f59e0b" : "#6366f1"}` } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", gap: 8 } }, /* @__PURE__ */ React.createElement("span", { style: { color: log.aksi === "HAPUS" ? "#ef4444" : log.aksi === "EDIT" ? "#f59e0b" : "#818cf8", fontWeight: 700, fontSize: 12 } }, log.aksi === "HAPUS" ? "\u{1F5D1}\uFE0F" : log.aksi === "EDIT" ? "\u270F\uFE0F" : "\u2699\uFE0F", " ", log.aksi), /* @__PURE__ */ React.createElement("span", { style: { color: "#475569", fontSize: 11 } }, log.waktu)), /* @__PURE__ */ React.createElement("div", { style: { color: "#94a3b8", fontSize: 12, marginTop: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, log.detail))), auditLog.length === 0 && /* @__PURE__ */ React.createElement("div", { style: { color: "#475569", fontSize: 12, marginTop: 8, textAlign: "center" } }, "Belum ada aktivitas tercatat")), /* @__PURE__ */ React.createElement("div", { style: { background: "#1e293b", borderRadius: 14, padding: 14, marginBottom: 12, border: "1px solid #334155" } }, /* @__PURE__ */ React.createElement("div", { style: { color: "#e2e8f0", fontWeight: 800, fontSize: 14, marginBottom: 4 } }, "\u26A1 Nominal Cepat"), /* @__PURE__ */ React.createElement("div", { style: { color: "#64748b", fontSize: 12, marginBottom: 12 } }, "Tombol cepat saat input jumlah kasbon. Klik untuk akumulasi."), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 } }, quickAmts.map((a, i) => /* @__PURE__ */ React.createElement("div", { key: i, style: { display: "flex", alignItems: "center", gap: 4, background: "#0f172a", border: "1px solid #334155", borderRadius: 20, padding: "4px 10px" } }, /* @__PURE__ */ React.createElement("span", { style: { color: "#e2e8f0", fontSize: 13, fontWeight: 600 } }, fmt(a)), /* @__PURE__ */ React.createElement("button", { onClick: () => setQuickAmts((q) => q.filter((_, j) => j !== i)), style: { background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 0, marginLeft: 2 } }, "\u2715")))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement(
+    "input",
+    {
+      type: "text",
+      inputMode: "numeric",
+      value: newAmt,
+      onChange: (e) => {
+        const r = e.target.value.replace(/\./g, "").replace(/[^0-9]/g, "");
+        setNewAmt(r === "" ? "" : Number(parseInt(r, 10) || 0).toLocaleString("id-ID"));
+      },
+      placeholder: "Tambah nominal... cth: 75.000",
+      style: { ...IS, flex: 1 }
+    }
+  ), /* @__PURE__ */ React.createElement("button", { onClick: () => {
+    const n = parseInt(newAmt.replace(/\./g, ""), 10) || 0;
+    if (!n) {
+      showToast("Nominal tidak valid", "err");
+      return;
+    }
+    if (quickAmts.includes(n)) {
+      showToast("Nominal sudah ada", "err");
+      return;
+    }
+    setQuickAmts((q) => [...q, n].sort((a, b) => a - b));
+    setNewAmt("");
+    showToast("Nominal ditambahkan!");
+  }, style: { padding: "10px 14px", borderRadius: 10, border: "none", cursor: "pointer", background: "linear-gradient(90deg,#1d4ed8,#0ea5e9)", color: "#fff", fontWeight: 800, fontSize: 14, whiteSpace: "nowrap" } }, "+ Tambah"))), /* @__PURE__ */ React.createElement("div", { style: { background: "#1e293b", borderRadius: 14, padding: 14, border: "1px solid #334155" } }, /* @__PURE__ */ React.createElement("div", { style: { color: "#e2e8f0", fontWeight: 800, fontSize: 14, marginBottom: 4 } }, "\u{1F4CB} Template Keterangan"), /* @__PURE__ */ React.createElement("div", { style: { color: "#64748b", fontSize: 12, marginBottom: 12 } }, "Pilihan cepat saat mengisi keterangan kasbon."), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 } }, ketTpls.map((t, i) => /* @__PURE__ */ React.createElement("div", { key: i, style: { display: "flex", alignItems: "center", justifyContent: "space-between", background: "#0f172a", border: "1px solid #334155", borderRadius: 10, padding: "9px 12px" } }, /* @__PURE__ */ React.createElement("span", { style: { color: "#e2e8f0", fontSize: 13 } }, t), /* @__PURE__ */ React.createElement("button", { onClick: () => setKetTpls((a) => a.filter((_, j) => j !== i)), style: { background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 16, lineHeight: 1, padding: 0, flexShrink: 0, marginLeft: 8 } }, "\u2715")))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement(
+    "input",
+    {
+      value: newKet,
+      onChange: (e) => setNewKet(e.target.value),
+      onKeyDown: (e) => {
+        if (e.key === "Enter") {
+          const t = newKet.trim();
+          if (!t) return;
+          if (ketTpls.includes(t)) {
+            showToast("Sudah ada", "err");
+            return;
+          }
+          setKetTpls((a) => [...a, t]);
+          setNewKet("");
+          showToast("Template ditambahkan!");
+        }
+      },
+      placeholder: "Tambah template keterangan...",
+      style: { ...IS, flex: 1 }
+    }
+  ), /* @__PURE__ */ React.createElement("button", { onClick: () => {
+    const t = newKet.trim();
+    if (!t) {
+      showToast("Tidak boleh kosong", "err");
+      return;
+    }
+    if (ketTpls.includes(t)) {
+      showToast("Template sudah ada", "err");
+      return;
+    }
+    setKetTpls((a) => [...a, t]);
+    setNewKet("");
+    showToast("Template ditambahkan!");
+  }, style: { padding: "10px 14px", borderRadius: 10, border: "none", cursor: "pointer", background: "linear-gradient(90deg,#1d4ed8,#0ea5e9)", color: "#fff", fontWeight: 800, fontSize: 14, whiteSpace: "nowrap" } }, "+ Tambah"))))), /* @__PURE__ */ React.createElement("style", null, `
+        @keyframes slideIn{from{transform:translateX(80px);opacity:0}to{transform:translateX(0);opacity:1}}
+        @keyframes popIn{from{transform:scale(.85);opacity:0}to{transform:scale(1);opacity:1}}
+        select option{background:#1e293b}
+        *{-webkit-tap-highlight-color:transparent}
+      `));
+}
+function KasbonApp() {
+  const [currentUser, setCurrentUser] = useState(null);
+  if (!currentUser) {
+    return /* @__PURE__ */ React.createElement(LoginScreen, { onLogin: (u) => setCurrentUser(u) });
+  }
+  return /* @__PURE__ */ React.createElement(
+    KasbonMain,
+    {
+      currentUser,
+      onLogout: () => setCurrentUser(null)
+    }
+  );
+}
+
+      var container=document.getElementById("root");
+      var root=ReactDOM.createRoot(container);
+      root.render(React.createElement(KasbonApp));
+      document.getElementById("loading").style.display="none";
+    }catch(err){
+      console.error(err);
+      document.getElementById('loading').innerHTML=
+        '<div style="color:#fca5a5;padding:20px;text-align:left"><b>⚠️ Error</b>'+
+        '<pre style="font-size:10px;background:#0f172a;padding:10px;border-radius:6px;margin-top:8px;overflow:auto;max-height:200px;white-space:pre-wrap;color:#94a3b8">'+
+        err.toString()+"\n"+(err.stack||'')+'</pre>'+
+        '<button onclick="location.reload()" style="margin-top:12px;padding:10px 20px;background:#3b82f6;color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:700">🔄 Coba Lagi</button></div>';
+    }
+  </script>
+</body>
+</html>
